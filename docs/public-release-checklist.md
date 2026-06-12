@@ -1,9 +1,8 @@
 # Public Release Checklist
 
-Use this checklist before making the repository public and before every npm
-release candidate. The goal is to prove that the public repo contains only public
-contracts, installs cleanly from tarballs, and gives new users a working first
-path.
+Use this checklist before every npm release candidate. The goal is to prove
+that the public repo contains only public contracts, installs cleanly from
+tarballs, and gives new users a working first path.
 
 ## Release blockers
 
