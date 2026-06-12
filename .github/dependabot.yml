@@ -9,6 +9,10 @@ updates:
       time: "09:00"
       timezone: "Asia/Shanghai"
     open-pull-requests-limit: 5
+    ignore:
+      # TypeScript 6 removes baseUrl; migrate tsconfigs before taking the major.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
     groups:
       js-dependencies:
         patterns:
