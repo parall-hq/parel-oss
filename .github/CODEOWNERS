@@ -1,0 +1,8 @@
+# Default owners for everything
+* @parall-hq/parall-human-reviewer
+
+# CI/CD and security-sensitive paths require security review
+/.github/ @parall-hq/parall-human-reviewer @parall-hq/parall-infra
+/schemas/ @parall-hq/parall-human-reviewer
+/protocol/ @parall-hq/parall-human-reviewer
+/js/plugins/security-basic/ @parall-hq/parall-human-reviewer @parall-hq/parall-infra

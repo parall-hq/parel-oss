@@ -1,0 +1,10 @@
+{
+  "name": "@parel/memory-rolling-summary",
+  "version": "0.1.2",
+  "execution": {
+    "snapshot": {
+      "store": "copy",
+      "sideEffects": "reference"
+    }
+  }
+}

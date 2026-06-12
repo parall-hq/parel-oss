@@ -1,0 +1,22 @@
+{
+  "$schema": "../../../schemas/plugin-manifest.schema.json",
+  "name": "@parel/approval-tools",
+  "version": "0.1.1",
+  "description": "Human approval request and check tools backed by session inputs.",
+  "provides": {
+    "hooks": true,
+    "tools": true
+  },
+  "requires": {
+    "permissions": {
+      "inputs": true,
+      "store": true
+    }
+  },
+  "execution": {
+    "snapshot": {
+      "store": "reset",
+      "sideEffects": "require_approval"
+    }
+  }
+}

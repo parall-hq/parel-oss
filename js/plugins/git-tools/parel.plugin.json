@@ -1,0 +1,18 @@
+{
+  "$schema": "../../../schemas/plugin-manifest.schema.json",
+  "name": "@parel/git-tools",
+  "version": "0.1.1",
+  "description": "Workspace Git status, diff, branch, and commit tools.",
+  "provides": {
+    "tools": true
+  },
+  "requires": {
+    "capabilities": ["workspace", "exec"]
+  },
+  "execution": {
+    "snapshot": {
+      "store": "reset",
+      "sideEffects": "require_approval"
+    }
+  }
+}

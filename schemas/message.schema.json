@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.parel.sh/v1/message.schema.json",
+  "title": "PAREL Message",
+  "description": "Provider-neutral transcript message and message part schema.",
+  "type": "object",
+  "required": ["role", "parts"],
+  "properties": {
+    "id": { "type": "string" },
+    "sessionId": { "type": "string" },
+    "turnId": { "type": "string" },
+    "seq": { "type": "integer", "minimum": 0 },
+    "role": {
+      "type": "string",
+      "enum": ["system", "user", "assistant", "tool"]
+    },
+    "parts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/messagePart" }
+    },
+    "provider": { "type": "string" },
+    "model": { "type": "string" },
+    "status": {
+      "type": "string",
+      "enum": ["streaming", "completed", "error"]
+    },
+    "createdAt": { "type": "string" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "visibility": {
+      "type": "string",
+      "enum": ["chat", "trace", "hidden"]
+    },
+    "providerReplayScope": {
+      "type": "string",
+      "enum": ["same_provider", "same_provider_model", "never"]
+    },
+    "providerArtifact": {
+      "type": "object",
+      "required": ["provider", "artifactType", "replayScope", "requiredForReplay", "payload"],
+      "properties": {
+        "id": { "type": "string" },
+        "provider": { "type": "string" },
+        "artifactType": { "type": "string" },
+        "replayScope": { "$ref": "#/$defs/providerReplayScope" },
+        "requiredForReplay": { "type": "boolean" },
+        "payload": true,
+        "payloadHash": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "partBase": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "visibility": { "$ref": "#/$defs/visibility" },
+        "provider": { "type": "string" },
+        "model": { "type": "string" },
+        "providerArtifacts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/providerArtifact" }
+        }
+      }
+    },
+    "textPart": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "#/$defs/partBase" },
+        {
+          "type": "object",
+          "required": ["type", "text"],
+          "properties": {
+            "type": { "const": "text" },
+            "text": { "type": "string" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "imagePart": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "#/$defs/partBase" },
+        {
+          "type": "object",
+          "required": ["type", "data", "mediaType"],
+          "properties": {
+            "type": { "const": "image" },
+            "data": { "type": "string" },
+            "mediaType": { "type": "string" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "filePart": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "#/$defs/partBase" },
+        {
+          "type": "object",
+          "required": ["type", "data", "mediaType"],
+          "properties": {
+            "type": { "const": "file" },
+            "data": { "type": "string" },
+            "mediaType": { "type": "string" },
+            "filename": { "type": "string" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "reasoningPart": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "#/$defs/partBase" },
+        {
+          "type": "object",
+          "required": ["type"],
+          "properties": {
+            "type": { "const": "reasoning" },
+            "text": { "type": "string" },
+            "summary": { "type": "string" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "toolCall": {
+      "type": "object",
+      "required": ["id", "name", "arguments"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "toolCallPart": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "#/$defs/partBase" },
+        {
+          "type": "object",
+          "required": ["type", "toolCall"],
+          "properties": {
+            "type": { "const": "tool_call" },
+            "toolCall": { "$ref": "#/$defs/toolCall" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "toolResultPart": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "#/$defs/partBase" },
+        {
+          "type": "object",
+          "required": ["type", "toolCallId", "content"],
+          "properties": {
+            "type": { "const": "tool_result" },
+            "toolCallId": { "type": "string" },
+            "content": { "type": "string" },
+            "isError": { "type": "boolean" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "sourcePart": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "#/$defs/partBase" },
+        {
+          "type": "object",
+          "required": ["type", "sourceType", "payload"],
+          "properties": {
+            "type": { "const": "source" },
+            "sourceType": { "type": "string" },
+            "payload": true
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "messagePart": {
+      "oneOf": [
+        { "$ref": "#/$defs/textPart" },
+        { "$ref": "#/$defs/imagePart" },
+        { "$ref": "#/$defs/filePart" },
+        { "$ref": "#/$defs/reasoningPart" },
+        { "$ref": "#/$defs/toolCallPart" },
+        { "$ref": "#/$defs/toolResultPart" },
+        { "$ref": "#/$defs/sourcePart" }
+      ]
+    }
+  }
+}

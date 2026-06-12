@@ -1,0 +1,18 @@
+{
+  "$schema": "../../../schemas/plugin-manifest.schema.json",
+  "name": "@parel/search-tools",
+  "version": "0.1.1",
+  "description": "Workspace text search and file-finding tools.",
+  "provides": {
+    "tools": true
+  },
+  "requires": {
+    "capabilities": ["workspace", "exec"]
+  },
+  "execution": {
+    "snapshot": {
+      "store": "reset",
+      "sideEffects": "reference"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+packages:
+  - packages/*
+  - capabilities/*
+  - plugins/*
+  - apps/*
+
+approveBuilds:
+  - esbuild

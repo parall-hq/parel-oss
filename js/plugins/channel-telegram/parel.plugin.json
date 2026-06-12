@@ -1,0 +1,27 @@
+{
+  "name": "@parel/channel-telegram",
+  "version": "0.1.0",
+  "type": "channel",
+  "channel": {
+    "connectionTypes": ["webhook"],
+    "sources": ["telegram.webhook"]
+  },
+  "requires": {
+    "secrets": {
+      "botToken": {
+        "description": "Telegram bot token from BotFather, used for Bot API delivery.",
+        "required": true
+      },
+      "webhookSecret": {
+        "description": "Optional Telegram setWebhook secret_token; verified against X-Telegram-Bot-Api-Secret-Token.",
+        "required": false
+      }
+    }
+  },
+  "execution": {
+    "snapshot": {
+      "store": "reset",
+      "sideEffects": "reference"
+    }
+  }
+}

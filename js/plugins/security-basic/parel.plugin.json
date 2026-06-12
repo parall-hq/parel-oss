@@ -1,0 +1,10 @@
+{
+  "name": "@parel/security-basic",
+  "version": "0.1.5",
+  "execution": {
+    "snapshot": {
+      "store": "reset",
+      "sideEffects": "reference"
+    }
+  }
+}

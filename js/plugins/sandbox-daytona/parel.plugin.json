@@ -1,0 +1,38 @@
+{
+  "name": "@parel/sandbox-daytona",
+  "version": "0.0.0",
+  "description": "Provides the standard parel.sandbox capability backed by Daytona.",
+  "provides": {
+    "capabilities": ["parel.sandbox", "filesystem", "exec", "process", "ports"]
+  },
+  "requires": {
+    "permissions": {
+      "network": true,
+      "store": true
+    },
+    "secrets": {
+      "apiKey": {
+        "description": "Daytona API key",
+        "required": true
+      }
+    }
+  },
+  "config": {
+    "apiUrl": "Optional Daytona API URL.",
+    "target": "Optional Daytona target.",
+    "sandboxId": "Optional existing sandbox id or name to reconnect.",
+    "name": "Optional name for a created sandbox.",
+    "snapshot": "Optional Daytona snapshot name.",
+    "image": "Optional container image.",
+    "language": "Optional Daytona language.",
+    "timeoutMs": "Optional create/start timeout in milliseconds.",
+    "destroyOnSessionEnd": "Defaults to true. When false, the sandbox is stopped instead of deleted."
+  },
+  "execution": {
+    "snapshot": {
+      "store": "reset",
+      "sandbox": "reset",
+      "sideEffects": "require_approval"
+    }
+  }
+}

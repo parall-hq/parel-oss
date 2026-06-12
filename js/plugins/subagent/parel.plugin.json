@@ -1,0 +1,10 @@
+{
+  "name": "@parel/subagent",
+  "version": "0.2.2",
+  "execution": {
+    "snapshot": {
+      "store": "reset",
+      "sideEffects": "require_approval"
+    }
+  }
+}

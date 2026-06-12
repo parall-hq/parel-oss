@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.parel.sh/v1/websocket-event.schema.json",
+  "title": "PAREL WebSocket Event",
+  "description": "Client and server events for the session WebSocket.",
+  "oneOf": [
+    { "$ref": "#/$defs/clientMessage" },
+    { "$ref": "#/$defs/clientResume" },
+    { "$ref": "#/$defs/sync" },
+    { "$ref": "#/$defs/text" },
+    { "$ref": "#/$defs/reasoningStart" },
+    { "$ref": "#/$defs/reasoningDelta" },
+    { "$ref": "#/$defs/reasoningEnd" },
+    { "$ref": "#/$defs/toolCall" },
+    { "$ref": "#/$defs/toolResult" },
+    { "$ref": "#/$defs/turnEnd" },
+    { "$ref": "#/$defs/error" }
+  ],
+  "$defs": {
+    "sessionState": {
+      "type": "object",
+      "required": [
+        "id",
+        "agentId",
+        "orgId",
+        "status",
+        "turnCount",
+        "stepCount",
+        "totalTokens",
+        "totalCostUsd",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "agentId": { "type": "string" },
+        "orgId": { "type": "string" },
+        "status": {
+          "type": "string",
+          "enum": ["initializing", "running", "ready", "suspended", "completed", "error", "timeout"]
+        },
+        "turnCount": { "type": "integer", "minimum": 0 },
+        "stepCount": { "type": "integer", "minimum": 0 },
+        "totalTokens": { "type": "number", "minimum": 0 },
+        "totalCostUsd": { "type": "number", "minimum": 0 },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "additionalProperties": true
+    },
+    "clientMessage": {
+      "type": "object",
+      "required": ["type", "content"],
+      "properties": {
+        "type": { "const": "message" },
+        "content": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "clientResume": {
+      "type": "object",
+      "description": "Client request to replay the current transcript after a (re)connect.",
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "resume" },
+        "since_seq": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "sync": {
+      "type": "object",
+      "description": "Server transcript replay, emitted on connect and on resume.",
+      "required": ["type", "state", "messages", "eventSeq", "running"],
+      "properties": {
+        "type": { "const": "sync" },
+        "state": { "$ref": "#/$defs/sessionState" },
+        "messages": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": true }
+        },
+        "eventSeq": { "type": "integer", "minimum": 0 },
+        "running": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "text": {
+      "type": "object",
+      "required": ["type", "text"],
+      "properties": {
+        "type": { "const": "text" },
+        "text": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "reasoningStart": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "reasoning_start" },
+        "visibility": {
+          "type": "string",
+          "enum": ["chat", "trace", "hidden"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "reasoningDelta": {
+      "type": "object",
+      "required": ["type", "text"],
+      "properties": {
+        "type": { "const": "reasoning_delta" },
+        "text": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "reasoningEnd": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "reasoning_end" }
+      },
+      "additionalProperties": false
+    },
+    "toolCall": {
+      "type": "object",
+      "required": ["type", "name", "arguments"],
+      "properties": {
+        "type": { "const": "tool_call" },
+        "name": { "type": "string" },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "toolResult": {
+      "type": "object",
+      "required": ["type", "name", "content", "isError"],
+      "properties": {
+        "type": { "const": "tool_result" },
+        "name": { "type": "string" },
+        "content": { "type": "string" },
+        "isError": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "turnEnd": {
+      "type": "object",
+      "required": ["type", "state"],
+      "properties": {
+        "type": { "const": "turn_end" },
+        "state": { "$ref": "#/$defs/sessionState" }
+      },
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "required": ["type", "error"],
+      "properties": {
+        "type": { "const": "error" },
+        "error": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}
+

@@ -1,0 +1,15 @@
+version: "1"
+agent:
+  name: hello-agent
+
+model:
+  provider: anthropic
+  model: claude-sonnet-4-20250514
+
+plugins:
+  - plugin: system-static
+    config:
+      prompt: You are a concise assistant.
+  - plugin: sandbox-e2b
+    config:
+      apiKey: ${E2B_API_KEY}

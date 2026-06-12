@@ -1,0 +1,44 @@
+version: "1"
+agent:
+  name: coding-agent
+
+model:
+  provider: anthropic
+  model: claude-sonnet-4-20250514
+
+runtime:
+  maxSteps: 80
+  maxParallelToolCalls: 4
+  toolResultMaxBytes: 65536
+
+plugins:
+  - plugin: "@parel/coding-agent"
+  - plugin: "@parel/security-basic"
+  # ${E2B_API_KEY} is a secret reference: `parel deploy` uploads the value from
+  # your local environment (encrypted, agent-scoped) and the platform injects
+  # it at session start. The value never lands in this file or in git. Literal
+  # keys here are rejected at deploy time.
+  - plugin: "@parel/sandbox-e2b"
+    config:
+      template: base
+      apiKey: ${E2B_API_KEY}
+  # The repo must be a publicly clonable https URL: the sandbox has no git
+  # credentials, so ssh remotes and private repositories are not supported yet.
+  - plugin: "@parel/workspace"
+    config:
+      identity:
+        sourceKind: git
+        repo: https://github.com/octocat/Hello-World.git
+        branch: master
+      baseDir: /workspace
+  - plugin: "@parel/filesystem-tools"
+  - plugin: "@parel/search-tools"
+  - plugin: "@parel/edit-tools"
+  - plugin: "@parel/git-tools"
+  - plugin: "@parel/shell-tools"
+  - plugin: "@parel/process-tools"
+  - plugin: "@parel/port-tools"
+  - plugin: "@parel/approval-tools"
+  - plugin: "@parel/subagent"
+    config:
+      mode: async

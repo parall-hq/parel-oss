@@ -1,0 +1,10 @@
+{
+  "name": "@parel/budget-cap",
+  "version": "0.0.8",
+  "execution": {
+    "snapshot": {
+      "store": "reset",
+      "sideEffects": "reference"
+    }
+  }
+}

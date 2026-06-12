@@ -1,0 +1,18 @@
+{
+  "$schema": "../../../schemas/plugin-manifest.schema.json",
+  "name": "@parel/process-tools",
+  "version": "0.1.1",
+  "description": "Workspace background process start, list, tail, and stop tools.",
+  "provides": {
+    "tools": true
+  },
+  "requires": {
+    "capabilities": ["workspace", "process"]
+  },
+  "execution": {
+    "snapshot": {
+      "store": "reset",
+      "sideEffects": "require_approval"
+    }
+  }
+}

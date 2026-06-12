@@ -1,0 +1,53 @@
+# @parel/sandbox-daytona
+
+## 0.2.2
+
+### Patch Changes
+
+- @parel/plugin-sdk@0.4.2
+
+## 0.2.1
+
+### Patch Changes
+
+- @parel/plugin-sdk@0.4.1
+
+## 0.2.0
+
+### Minor Changes
+
+- c3d6746: Add `createSandboxCapabilityViews` to `@parel/capability-sandbox` and provide the
+  derived flat capability ids ("filesystem", "exec", "process", "ports") from every
+  sandbox provider. Previously only `@parel/sandbox-e2b` exposed these ids, so the
+  workspace and \*-tools plugins could not run on the other providers.
+
+### Patch Changes
+
+- Updated dependencies [c3d6746]
+  - @parel/capability-sandbox@0.2.0
+
+## 0.1.1
+
+### Patch Changes
+
+- Updated dependencies [429a42d]
+  - @parel/plugin-sdk@0.4.0
+  - @parel/capability-sandbox@0.1.1
+
+## 0.1.0
+
+### Minor Changes
+
+- d2a0a3a: Add first-party sandbox provider plugins for Daytona, Vercel Sandbox, Modal, and
+  Cloudflare Sandbox, and make E2B provide the shared `parel.sandbox` capability.
+
+### Patch Changes
+
+- Updated dependencies [6945eb2]
+- Updated dependencies [d2a0a3a]
+  - @parel/plugin-sdk@0.3.0
+  - @parel/capability-sandbox@0.1.0
+
+## 0.0.0
+
+Initial package placeholder. Published versions are prepared through Changesets.

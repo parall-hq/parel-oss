@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check release gate
+        run: |
+          if [[ "${{ github.event.head_commit.message }}" == chore:\ version\ packages* ]]; then
+            echo "Version packages commit detected; publish job will run."
+          else
+            echo "Release skipped: head commit is not a version packages commit."
+          fi
+
+  publish:
+    if: "${{ startsWith(github.event.head_commit.message, 'chore: version packages') }}"
+    runs-on: ubuntu-latest
+    environment: npm-release
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with:
+          version: 10
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+          cache-dependency-path: js/pnpm-lock.yaml
+
+      - name: Verify trusted publishing prerequisites
+        run: |
+          node --version
+          npm --version
+
+      - name: Install
+        working-directory: js
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate schemas
+        working-directory: js
+        run: pnpm exec ajv compile --spec=draft2020
+          -s ../schemas/agent-config.schema.json
+          -s ../schemas/message.schema.json
+          -s ../schemas/transcript.schema.json
+          -s ../schemas/websocket-event.schema.json
+          -s ../schemas/plugin-manifest.schema.json
+          -s ../schemas/api-error.schema.json
+
+      - name: Check
+        working-directory: js
+        run: pnpm check
+
+      - name: Build
+        working-directory: js
+        run: pnpm build
+
+      - name: Pack smoke
+        working-directory: js
+        run: pnpm pack:smoke
+
+      - name: Test
+        working-directory: js
+        run: pnpm test
+
+      - name: Lint
+        working-directory: js
+        run: pnpm lint
+
+      - name: Publish packages
+        working-directory: js
+        run: pnpm release

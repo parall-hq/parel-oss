@@ -1,0 +1,31 @@
+{
+  "name": "parel-oss-js",
+  "private": true,
+  "packageManager": "pnpm@10.30.2",
+  "engines": {
+    "node": ">=22.0.0",
+    "bun": ">=1.2"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "format": "biome format --write .",
+    "check": "biome check .",
+    "pack:smoke": "node scripts/pack-smoke.mjs",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "pnpm build && changeset publish"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.15",
+    "@changesets/cli": "^2.31.0",
+    "ajv-cli": "5.0.0",
+    "turbo": "^2.9.14"
+  },
+  "pnpm": {
+    "overrides": {
+      "fast-json-patch": "3.1.1"
+    }
+  }
+}

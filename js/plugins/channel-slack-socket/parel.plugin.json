@@ -1,0 +1,27 @@
+{
+  "name": "@parel/channel-slack-socket",
+  "version": "0.1.0",
+  "type": "channel",
+  "channel": {
+    "connectionTypes": ["managed_ws"],
+    "sources": ["slack.socket"]
+  },
+  "requires": {
+    "secrets": {
+      "appToken": {
+        "description": "Slack app-level token with connections:write, used for apps.connections.open.",
+        "required": true
+      },
+      "botToken": {
+        "description": "Slack bot token, used for Web API delivery such as chat.postMessage.",
+        "required": true
+      }
+    }
+  },
+  "execution": {
+    "snapshot": {
+      "store": "reset",
+      "sideEffects": "reference"
+    }
+  }
+}

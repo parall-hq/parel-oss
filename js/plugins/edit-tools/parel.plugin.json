@@ -1,0 +1,18 @@
+{
+  "$schema": "../../../schemas/plugin-manifest.schema.json",
+  "name": "@parel/edit-tools",
+  "version": "0.1.1",
+  "description": "Workspace file edit and patch-apply tools.",
+  "provides": {
+    "tools": true
+  },
+  "requires": {
+    "capabilities": ["workspace", "filesystem", "exec"]
+  },
+  "execution": {
+    "snapshot": {
+      "store": "reset",
+      "sideEffects": "require_approval"
+    }
+  }
+}

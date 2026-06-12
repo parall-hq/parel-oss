@@ -1,0 +1,52 @@
+{
+  "name": "@parel/filesystem-tools",
+  "version": "0.1.4",
+  "description": "Workspace-relative filesystem tools for PAREL coding agents.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/parall-hq/parel-oss.git",
+    "directory": "js/plugins/filesystem-tools"
+  },
+  "bugs": {
+    "url": "https://github.com/parall-hq/parel-oss/issues"
+  },
+  "homepage": "https://github.com/parall-hq/parel-oss#readme",
+  "type": "module",
+  "exports": {
+    ".": {
+      "bun": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "parel.plugin.json",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run --passWithNoTests",
+    "lint": "biome check src/"
+  },
+  "dependencies": {
+    "@parel/plugin-sdk": "workspace:*",
+    "@parel/workspace": "workspace:*"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      }
+    },
+    "access": "public"
+  }
+}

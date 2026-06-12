@@ -1,0 +1,22 @@
+{
+  "$schema": "../../../schemas/plugin-manifest.schema.json",
+  "name": "@parel/workspace",
+  "version": "0.1.1",
+  "description": "Provides the workspace capability: repo identity, materialize, and export.",
+  "provides": {
+    "tools": true,
+    "capabilities": ["workspace"]
+  },
+  "requires": {
+    "capabilities": ["exec"],
+    "permissions": {
+      "store": true
+    }
+  },
+  "execution": {
+    "snapshot": {
+      "store": "reset",
+      "sideEffects": "require_approval"
+    }
+  }
+}

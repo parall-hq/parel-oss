@@ -1,0 +1,27 @@
+{
+  "$schema": "../../../schemas/plugin-manifest.schema.json",
+  "name": "@parel/sandbox-e2b",
+  "version": "0.0.10",
+  "provides": {
+    "capabilities": ["parel.sandbox", "filesystem", "exec", "process", "ports"]
+  },
+  "requires": {
+    "permissions": {
+      "network": true,
+      "store": true
+    },
+    "secrets": {
+      "apiKey": {
+        "description": "E2B API key (e2b.dev -> Settings -> API Keys)",
+        "required": true
+      }
+    }
+  },
+  "execution": {
+    "snapshot": {
+      "store": "reset",
+      "sandbox": "reset",
+      "sideEffects": "require_approval"
+    }
+  }
+}

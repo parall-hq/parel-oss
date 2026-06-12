@@ -1,0 +1,15 @@
+{
+  "$schema": "../../../schemas/plugin-manifest.schema.json",
+  "name": "@parel/coding-agent",
+  "version": "0.1.1",
+  "description": "Coding agent profile that injects system prompt and tool-use guidance hooks.",
+  "provides": {
+    "hooks": true
+  },
+  "execution": {
+    "snapshot": {
+      "store": "reset",
+      "sideEffects": "reference"
+    }
+  }
+}

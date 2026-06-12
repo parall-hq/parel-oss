@@ -1,0 +1,50 @@
+{
+  "name": "@parel/plugin-sdk",
+  "version": "0.4.2",
+  "description": "Plugin authoring helpers for PAREL runtime plugins.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/parall-hq/parel-oss.git",
+    "directory": "js/packages/plugin-sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/parall-hq/parel-oss/issues"
+  },
+  "homepage": "https://github.com/parall-hq/parel-oss#readme",
+  "type": "module",
+  "exports": {
+    ".": {
+      "bun": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run --passWithNoTests",
+    "lint": "biome check src/"
+  },
+  "dependencies": {
+    "@parel/core": "workspace:*"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^4.1.8"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      }
+    },
+    "access": "public"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.parel.sh/v1/api-error.schema.json",
+  "title": "PAREL API Error",
+  "description": "Common public API error envelope.",
+  "type": "object",
+  "required": ["error"],
+  "properties": {
+    "error": {
+      "type": "string"
+    },
+    "details": true,
+    "code": {
+      "type": "string"
+    },
+    "request_id": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true
+}
+

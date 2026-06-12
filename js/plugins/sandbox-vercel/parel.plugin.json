@@ -1,0 +1,42 @@
+{
+  "name": "@parel/sandbox-vercel",
+  "version": "0.0.0",
+  "description": "Provides the standard parel.sandbox capability backed by Vercel Sandbox.",
+  "provides": {
+    "capabilities": ["parel.sandbox", "filesystem", "exec", "process", "ports"]
+  },
+  "requires": {
+    "permissions": {
+      "network": true,
+      "store": true
+    },
+    "secrets": {
+      "token": {
+        "description": "Vercel API token or OIDC token",
+        "required": true
+      },
+      "teamId": {
+        "description": "Vercel team id",
+        "required": true
+      },
+      "projectId": {
+        "description": "Vercel project id for Sandbox operations",
+        "required": true
+      }
+    }
+  },
+  "config": {
+    "name": "Optional named sandbox. Named sandboxes are reused with getOrCreate by default.",
+    "runtime": "Optional Vercel Sandbox runtime, such as node24 or python3.13.",
+    "ports": "Optional array of exposed ports.",
+    "timeoutMs": "Optional sandbox timeout in milliseconds.",
+    "destroyOnSessionEnd": "Defaults to true. When false, the sandbox is stopped instead of deleted."
+  },
+  "execution": {
+    "snapshot": {
+      "store": "reset",
+      "sandbox": "reset",
+      "sideEffects": "require_approval"
+    }
+  }
+}

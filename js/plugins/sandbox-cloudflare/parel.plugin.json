@@ -1,0 +1,30 @@
+{
+  "name": "@parel/sandbox-cloudflare",
+  "version": "0.0.0",
+  "description": "Provides the standard parel.sandbox capability backed by Cloudflare Sandbox.",
+  "provides": {
+    "capabilities": ["parel.sandbox", "filesystem", "exec", "process", "ports"]
+  },
+  "requires": {
+    "permissions": {
+      "network": true,
+      "store": true
+    }
+  },
+  "config": {
+    "namespace": "Required host-injected Cloudflare Durable Object namespace.",
+    "sandboxId": "Optional Durable Object id. Defaults to parel-default.",
+    "hostname": "Required for exposePort preview URLs.",
+    "sleepAfter": "Optional Cloudflare Sandbox sleepAfter option.",
+    "keepAlive": "Optional Cloudflare Sandbox keepAlive option.",
+    "transport": "Optional Cloudflare Sandbox transport.",
+    "destroyOnSessionEnd": "Defaults to false because the Durable Object is host-managed."
+  },
+  "execution": {
+    "snapshot": {
+      "store": "reset",
+      "sandbox": "reset",
+      "sideEffects": "require_approval"
+    }
+  }
+}

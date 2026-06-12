@@ -1,0 +1,43 @@
+{
+  "name": "@parel/sandbox-modal",
+  "version": "0.0.0",
+  "description": "Provides the standard parel.sandbox capability backed by Modal Sandboxes.",
+  "provides": {
+    "capabilities": ["parel.sandbox", "filesystem", "exec", "process", "ports"]
+  },
+  "requires": {
+    "permissions": {
+      "network": true,
+      "store": true
+    },
+    "secrets": {
+      "tokenId": {
+        "description": "Modal token id",
+        "required": true
+      },
+      "tokenSecret": {
+        "description": "Modal token secret",
+        "required": true
+      }
+    }
+  },
+  "config": {
+    "environment": "Optional Modal environment.",
+    "appName": "Modal app name. Defaults to parel-agent.",
+    "image": "Container image. Defaults to python:3.13.",
+    "sandboxId": "Optional running sandbox id to reconnect.",
+    "name": "Optional running sandbox name to reconnect or assign at creation.",
+    "timeoutMs": "Optional maximum sandbox lifetime.",
+    "idleTimeoutMs": "Optional idle timeout.",
+    "workdir": "Optional sandbox working directory.",
+    "ports": "Optional array of encrypted ports.",
+    "destroyOnSessionEnd": "Defaults to true. When false, the SDK object is detached."
+  },
+  "execution": {
+    "snapshot": {
+      "store": "reset",
+      "sandbox": "reset",
+      "sideEffects": "require_approval"
+    }
+  }
+}

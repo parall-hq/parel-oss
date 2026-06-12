@@ -1,0 +1,18 @@
+{
+  "$schema": "../../../schemas/plugin-manifest.schema.json",
+  "name": "@parel/port-tools",
+  "version": "0.1.1",
+  "description": "Sandbox port expose, list, and revoke tools.",
+  "provides": {
+    "tools": true
+  },
+  "requires": {
+    "capabilities": ["ports"]
+  },
+  "execution": {
+    "snapshot": {
+      "store": "reset",
+      "sideEffects": "require_approval"
+    }
+  }
+}

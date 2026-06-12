@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.parel.sh/v1/plugin-manifest.schema.json",
+  "title": "PAREL Plugin Manifest",
+  "description": "Public metadata for runtime plugins.",
+  "type": "object",
+  "required": ["name"],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string"
+    },
+    "provides": {
+      "type": "object",
+      "properties": {
+        "hooks": { "type": "boolean" },
+        "tools": { "type": "boolean" },
+        "capabilities": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "requires": {
+      "type": "object",
+      "properties": {
+        "plugins": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "capabilities": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "permissions": {
+          "type": "object",
+          "properties": {
+            "network": { "type": "boolean" },
+            "store": { "type": "boolean" },
+            "model": { "type": "boolean" },
+            "inputs": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        },
+        "secrets": {
+          "type": "object",
+          "description": "Declares which config fields are secrets, keyed by field name (e.g. apiKey). Values are bound via ${NAME} references in the agent config and substituted by the host before setup; the declaration drives deploy-time literal rejection, required validation, and redaction.",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["description"],
+            "properties": {
+              "description": { "type": "string" },
+              "required": { "type": "boolean", "default": true }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "config": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "execution": {
+      "type": "object",
+      "properties": {
+        "snapshot": {
+          "type": "object",
+          "properties": {
+            "store": {
+              "type": "string",
+              "enum": ["copy", "redact", "reset", "custom"]
+            },
+            "sandbox": {
+              "type": "string",
+              "enum": ["copy", "reset", "unsupported", "custom"]
+            },
+            "sideEffects": {
+              "type": "string",
+              "enum": ["reference", "require_approval", "deny_replay"]
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,48 @@
+{
+  "name": "@parel/cli",
+  "version": "0.2.1",
+  "description": "PAREL CLI - deploy and manage AI agents.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/parall-hq/parel-oss.git",
+    "directory": "js/apps/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/parall-hq/parel-oss/issues"
+  },
+  "homepage": "https://github.com/parall-hq/parel-oss#readme",
+  "type": "module",
+  "bin": {
+    "parel": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx src/index.ts",
+    "test": "vitest run --passWithNoTests",
+    "lint": "biome check src/"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "@parel/core": "workspace:*",
+    "citty": "^0.1.0",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "tsup": "^8.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0",
+    "vitest": "^4.1.8"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
