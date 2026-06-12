@@ -32,14 +32,14 @@
     "lint": "biome check src/"
   },
   "dependencies": {
-    "@e2b/code-interpreter": "^1.0.0",
+    "@e2b/code-interpreter": "^2.6.0",
     "@parel/capability-sandbox": "workspace:*",
     "@parel/plugin-sdk": "workspace:*"
   },
   "devDependencies": {
     "@types/bun": "^1.0.0",
     "tsup": "^8.0.0",
-    "typescript": "^5.8.0",
+    "typescript": "^6.0.3",
     "vitest": "^4.1.8"
   },
   "publishConfig": {
