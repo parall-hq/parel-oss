@@ -32,12 +32,12 @@
     "lint": "biome check src/"
   },
   "dependencies": {
-    "@daytona/sdk": "^0.184.0",
+    "@daytona/sdk": "^0.187.0",
     "@parel/capability-sandbox": "workspace:*",
     "@parel/plugin-sdk": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^25.9.1",
+    "@types/node": "^25.9.3",
     "tsup": "^8.0.0",
     "typescript": "^5.8.0",
     "vitest": "^4.1.8"

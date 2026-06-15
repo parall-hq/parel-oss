@@ -34,10 +34,10 @@
   "dependencies": {
     "@parel/capability-sandbox": "workspace:*",
     "@parel/plugin-sdk": "workspace:*",
-    "modal": "^0.7.6"
+    "modal": "^0.8.0"
   },
   "devDependencies": {
-    "@types/node": "^25.9.1",
+    "@types/node": "^25.9.3",
     "tsup": "^8.0.0",
     "typescript": "^5.8.0",
     "vitest": "^4.1.8"
