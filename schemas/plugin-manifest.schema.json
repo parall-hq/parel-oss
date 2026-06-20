@@ -25,6 +25,11 @@
       "properties": {
         "hooks": { "type": "boolean" },
         "tools": { "type": "boolean" },
+        "normalize": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Input types this plugin can normalize into transcript messages (e.g. \"async_callback\")."
+        },
         "capabilities": {
           "type": "array",
           "items": { "type": "string" }
