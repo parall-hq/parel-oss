@@ -4,6 +4,8 @@ import type {
 	ModelCallParams,
 	ModelCapabilities,
 	ModelStreamChunk,
+	NormalizeHandler,
+	NormalizeRegistrationOptions,
 	PluginLogger,
 	SessionStore,
 	ToolDefinition,
@@ -45,6 +47,18 @@ export interface PluginContext {
 
 	tool(definition: ToolDefinition, handler: ToolHandler, options?: ToolRegistrationOptions): void;
 
+	/**
+	 * Register a normalizer that turns inbound platform inputs of the given types
+	 * (e.g. "async_callback") into canonical transcript messages at intake.
+	 * Optional so plugins built against this SDK keep loading on hosts that predate
+	 * the capability — guard the call with `ctx.normalize?.(...)`.
+	 */
+	normalize?(
+		types: string[],
+		handler: NormalizeHandler,
+		options?: NormalizeRegistrationOptions,
+	): void;
+
 	provide<T = unknown>(name: string, implementation: T): void;
 	require<T = unknown>(name: string): T;
 
@@ -64,6 +78,8 @@ export interface PluginManifest {
 	provides?: {
 		hooks?: boolean;
 		tools?: boolean;
+		/** Input types this plugin can normalize into transcript messages (e.g. "async_callback"). */
+		normalize?: string[];
 		capabilities?: string[];
 	};
 	requires?: {

@@ -261,6 +261,36 @@ export type ToolHandler = (
 	ctx: ToolHandlerContext,
 ) => Promise<ToolHandlerReturn>;
 
+export interface NormalizeContext {
+	session: Readonly<SessionState>;
+	store: SessionStore;
+	inputs: InputQueue;
+	log: PluginLogger;
+}
+
+/**
+ * Turns an inbound platform input (an `InputQueueItem` of a declared type, e.g.
+ * "async_callback") into canonical transcript messages at intake. Returning
+ * `null` DEFERS: the input is left untouched for the next registered normalizer,
+ * a hook consumer, or the host's own type-specific handling. A normalizer must
+ * claim only inputs it owns and must NOT rely on a blanket host fallback for
+ * deferred inputs — `async_callback`, for instance, is a shared type whose
+ * `approval_result` kind is consumed by a different plugin's hook, so a host
+ * must not materialize a deferred callback as a generic text message. The host
+ * persists the returned messages, so replay reuses the stored result and is
+ * immune to plugin version drift.
+ */
+export type NormalizeHandler = (
+	type: string,
+	payload: unknown,
+	ctx: NormalizeContext,
+) => Promise<Message[] | null>;
+
+export interface NormalizeRegistrationOptions {
+	/** Lower runs earlier; the first non-null result wins. Defaults to 100. */
+	priority?: number;
+}
+
 export interface ReasoningConfig {
 	enabled: boolean;
 	budgetTokens?: number;

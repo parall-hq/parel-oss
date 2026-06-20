@@ -90,6 +90,24 @@ function drainSubagentResultInputs(inputs: InputQueue): InputQueueItem[] {
 	return [...subagentCallbacks, ...inputs.drain(SUBAGENT_CALLBACK_KIND)];
 }
 
+/** Render a subagent_result callback payload as a canonical user notification message. */
+function renderSubagentResult(payload: unknown): Message {
+	const p = isRecord(payload) ? payload : {};
+	const status = typeof p.status === "string" ? p.status : "completed";
+	const session = typeof p.childSessionId === "string" ? p.childSessionId : "";
+	const summary = typeof p.summary === "string" ? p.summary : "";
+	return {
+		role: "user",
+		parts: [
+			{
+				type: "text",
+				text: `<subagent_notification session="${session}" status="${status}">\n${summary}\n</subagent_notification>`,
+				visibility: "chat",
+			},
+		],
+	};
+}
+
 async function runInline(
 	model: ModelGatewayAccess,
 	opts: { task: string; instructions?: string; maxTokens?: number },
@@ -312,6 +330,16 @@ export default definePlugin({
 			},
 		);
 
+		// Preferred on hosts that support intake normalize: the host persists the
+		// subagent result into the transcript at turn start. Guarded so older hosts
+		// fall back to the ContextBuild rendering below (both are safe together — once
+		// the host consumes the async_callback at intake, the drain below is a no-op).
+		ctx.normalize?.([ASYNC_CALLBACK_TYPE], async (_type, payload) =>
+			isRecord(payload) && payload.callbackKind === SUBAGENT_CALLBACK_KIND
+				? [renderSubagentResult(payload)]
+				: null,
+		);
+
 		// Async re-entry: when a child session completes, the host delivers its
 		// result as a platform-level async_callback input and starts a new turn.
 		// Render subagent callbacks as context for the model (cf. steering-immediate).
@@ -319,25 +347,7 @@ export default definePlugin({
 			const results = drainSubagentResultInputs(hookCtx.inputs);
 			if (results.length === 0) return;
 
-			const notifications = results.map((item) => {
-				const p = (item.payload ?? {}) as {
-					childSessionId?: string;
-					status?: string;
-					summary?: string;
-				};
-				const status = p.status ?? "completed";
-				const session = p.childSessionId ?? "";
-				return {
-					role: "user" as const,
-					parts: [
-						{
-							type: "text" as const,
-							text: `<subagent_notification session="${session}" status="${status}">\n${p.summary ?? ""}\n</subagent_notification>`,
-							visibility: "chat" as const,
-						},
-					],
-				};
-			});
+			const notifications = results.map((item) => renderSubagentResult(item.payload));
 
 			return {
 				action: "continue" as const,
