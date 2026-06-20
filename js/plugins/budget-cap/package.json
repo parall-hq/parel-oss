@@ -1,6 +1,6 @@
 {
   "name": "@parel/budget-cap",
-  "version": "0.0.12",
+  "version": "0.0.13",
   "description": "PAREL plugin for budget and turn limits.",
   "license": "MIT",
   "repository": {

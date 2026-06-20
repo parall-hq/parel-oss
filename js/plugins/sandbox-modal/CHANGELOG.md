@@ -1,5 +1,12 @@
 # @parel/sandbox-modal
 
+## 0.2.3
+
+### Patch Changes
+
+- Updated dependencies [095391b]
+  - @parel/plugin-sdk@0.5.0
+
 ## 0.2.2
 
 ### Patch Changes
