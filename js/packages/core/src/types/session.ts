@@ -150,6 +150,21 @@ export type MessagePart =
 	| ToolResultPart
 	| SourcePart;
 
+/**
+ * Where an inbound message came from, for multi-speaker / group-chat attribution.
+ * Populated for messages materialized from external channel events; omitted for
+ * direct user messages and model/tool output. All fields optional so connectors
+ * can supply whatever they know.
+ */
+export interface MessageOrigin {
+	/** Connector/source identifier, e.g. the channel envelope `source` ("wechat"). */
+	channel?: string;
+	/** Conversation/thread/group id within the channel (distinguishes group chats). */
+	conversationId?: string;
+	/** Speaker identity within the conversation (who sent this message). */
+	author?: string;
+}
+
 export interface Message {
 	id?: string;
 	sessionId?: string;
@@ -162,6 +177,8 @@ export interface Message {
 	model?: string;
 	status?: MessageStatus;
 	createdAt?: string;
+	/** Provenance for channel-sourced messages; see {@link MessageOrigin}. */
+	origin?: MessageOrigin;
 }
 
 export interface ToolCall {
