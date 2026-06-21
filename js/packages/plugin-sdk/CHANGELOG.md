@@ -1,5 +1,16 @@
 # @parel/plugin-sdk
 
+## 0.6.0
+
+### Minor Changes
+
+- 3ee20d4: Add `Message.origin` (`MessageOrigin`: `channel`/`conversationId`/`author`) for multi-speaker / group-chat attribution of channel-sourced messages.
+
+### Patch Changes
+
+- Updated dependencies [3ee20d4]
+  - @parel/core@0.10.0
+
 ## 0.5.0
 
 ### Minor Changes
