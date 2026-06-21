@@ -18,10 +18,10 @@
     "release": "pnpm build && changeset publish"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.15",
+    "@biomejs/biome": "^2.5.0",
     "@changesets/cli": "^2.31.0",
     "ajv-cli": "5.0.0",
-    "turbo": "^2.9.14"
+    "turbo": "^2.9.18"
   },
   "pnpm": {
     "overrides": {

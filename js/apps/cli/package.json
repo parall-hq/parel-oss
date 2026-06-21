@@ -32,15 +32,15 @@
   },
   "dependencies": {
     "@parel/core": "workspace:*",
-    "citty": "^0.1.0",
+    "citty": "^0.2.2",
     "yaml": "^2.9.0"
   },
   "devDependencies": {
-    "@types/node": "^25.9.1",
+    "@types/node": "^26.0.0",
     "tsup": "^8.0.0",
-    "tsx": "^4.19.0",
+    "tsx": "^4.22.4",
     "typescript": "^5.8.0",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.9"
   },
   "publishConfig": {
     "access": "public"
