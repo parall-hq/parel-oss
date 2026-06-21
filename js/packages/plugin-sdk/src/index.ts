@@ -39,6 +39,7 @@ export type {
 	LifecycleEventType,
 	ListExecutionSnapshotsOptions,
 	Message,
+	MessageOrigin,
 	MessagePart,
 	MessagePartVisibility,
 	MessageRole,
