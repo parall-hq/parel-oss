@@ -1,6 +1,6 @@
 {
   "name": "@parel/git-tools",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Workspace Git tools for PAREL coding agents.",
   "license": "MIT",
   "repository": {
