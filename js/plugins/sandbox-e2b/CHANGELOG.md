@@ -1,5 +1,17 @@
 # @parel/sandbox-e2b
 
+## 0.2.0
+
+### Minor Changes
+
+- 440f4b9: Consume per-turn invocation context. The plugin now declares `consumes.invocationContext` and, when the host injects it, flattens `toolCtx.invocationContext.context` into per-command env vars for each `bash` execution (`commands.run(cmd, { envs })`). This lets per-turn values (e.g. a chat id that changes every input) reach in-sandbox CLIs via `process.env` without baking them into the cold-start env. Cold-start `config.env` remains for values that are constant for the whole sandbox.
+- 676f8be: Inject sandbox-level env vars at cold-start. The plugin now passes its `config.env` map through to `Sandbox.create({ envs })`, so a host can seed persistent environment variables (visible to every command in the sandbox) without a per-command prefix.
+
+### Patch Changes
+
+- Updated dependencies [440f4b9]
+  - @parel/plugin-sdk@0.7.0
+
 ## 0.1.5
 
 ### Patch Changes

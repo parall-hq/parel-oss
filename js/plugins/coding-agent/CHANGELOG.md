@@ -1,5 +1,12 @@
 # @parel/coding-agent
 
+## 0.1.7
+
+### Patch Changes
+
+- Updated dependencies [440f4b9]
+  - @parel/plugin-sdk@0.7.0
+
 ## 0.1.6
 
 ### Patch Changes
