@@ -683,6 +683,7 @@ async function deployAgentFile(
 ): Promise<{
 	id: string;
 	name: string;
+	version?: number;
 	uploaded_secrets: Array<{ name: string; source: string }>;
 }> {
 	const secrets = gatherDeploySecrets(
@@ -700,7 +701,7 @@ async function deployAgentFile(
 	}
 	const req = await buildAgentDeployRequest(file, server, secrets);
 	const res = await apiFetch(server, path, { method, headers: req.headers, body: req.body });
-	const agent = (await res.json()) as { id: string; name: string };
+	const agent = (await res.json()) as { id: string; name: string; version?: number };
 	return {
 		...agent,
 		uploaded_secrets: secrets.map((s) => ({ name: s.name, source: s.source })),
@@ -1479,7 +1480,11 @@ const deploy = defineCommand({
 				args,
 				secretOverrides,
 			});
-			outputSuccess(agent, `${c.green(`Deployed: ${agent.name}`)}  ${c.dim(agent.id)}`, args);
+			outputSuccess(
+				agent,
+				`${c.green(`Deployed: ${agent.name}`)}${agent.version ? c.dim(` v${agent.version}`) : ""}  ${c.dim(agent.id)}`,
+				args,
+			);
 		} catch (err) {
 			handleError(err);
 		}
@@ -1554,7 +1559,11 @@ const agentsUpdate = defineCommand({
 				args,
 				secretOverrides: parseSecretOverrides(args.secret),
 			});
-			outputSuccess(agent, c.green(`Updated: ${agent.name} (${agent.id})`), args);
+			outputSuccess(
+				agent,
+				c.green(`Updated: ${agent.name}${agent.version ? ` v${agent.version}` : ""} (${agent.id})`),
+				args,
+			);
 		} catch (err) {
 			handleError(err);
 		}
@@ -1579,9 +1588,157 @@ const agentsDelete = defineCommand({
 	},
 });
 
+const agentsRename = defineCommand({
+	meta: { name: "rename", description: "Rename an agent (keeps its id, versions and sessions)" },
+	args: {
+		agent: { type: "positional", description: "Current agent name or id", required: true },
+		newName: { type: "positional", description: "New name", required: true },
+		json: { type: "boolean" },
+		server: { type: "string" },
+	},
+	async run({ args }) {
+		requireAuth(args);
+		try {
+			const res = await apiFetch(
+				resolveServer(args),
+				`/agents/${encodeURIComponent(args.agent)}/rename`,
+				{
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ name: args.newName }),
+				},
+			);
+			const data = (await res.json()) as { id: string; name: string };
+			outputSuccess(data, c.green(`Renamed to ${data.name} (${data.id})`), args);
+		} catch (err) {
+			handleError(err);
+		}
+	},
+});
+
 const agents = defineCommand({
 	meta: { name: "agents", description: "Agent management" },
-	subCommands: { list: agentsList, get: agentsGet, update: agentsUpdate, delete: agentsDelete },
+	subCommands: {
+		list: agentsList,
+		get: agentsGet,
+		update: agentsUpdate,
+		rename: agentsRename,
+		delete: agentsDelete,
+	},
+});
+
+// ── Commands: versions / deployments / rollback ─────────────────────
+
+const versionsList = defineCommand({
+	meta: { name: "list", description: "List an agent's versions" },
+	args: {
+		agent: { type: "positional", description: "Agent name or id", required: true },
+		json: { type: "boolean" },
+		server: { type: "string" },
+	},
+	async run({ args }) {
+		requireAuth(args);
+		try {
+			const res = await apiFetch(
+				resolveServer(args),
+				`/agents/${encodeURIComponent(args.agent)}/versions`,
+			);
+			const list = (await res.json()) as Record<string, unknown>[];
+			if (wantsJson(args)) {
+				console.log(JSON.stringify(list));
+				return;
+			}
+			printTable(
+				list.map((v) => ({
+					version: `v${v.number}${v.active ? c.green(" *") : ""}`,
+					created: v.created_at,
+					message: v.message ?? "",
+				})),
+			);
+		} catch (err) {
+			handleError(err);
+		}
+	},
+});
+
+const versions = defineCommand({
+	meta: { name: "versions", description: "Agent version history" },
+	subCommands: { list: versionsList },
+});
+
+const deploymentsList = defineCommand({
+	meta: { name: "list", description: "List an agent's deployment timeline" },
+	args: {
+		agent: { type: "positional", description: "Agent name or id", required: true },
+		json: { type: "boolean" },
+		server: { type: "string" },
+	},
+	async run({ args }) {
+		requireAuth(args);
+		try {
+			const res = await apiFetch(
+				resolveServer(args),
+				`/agents/${encodeURIComponent(args.agent)}/deployments`,
+			);
+			const list = (await res.json()) as Record<string, unknown>[];
+			if (wantsJson(args)) {
+				console.log(JSON.stringify(list));
+				return;
+			}
+			printTable(
+				list.map((d) => ({
+					when: d.created_at,
+					kind: d.kind,
+					version: d.version_number != null ? `v${d.version_number}` : c.dim(String(d.version_id)),
+				})),
+			);
+		} catch (err) {
+			handleError(err);
+		}
+	},
+});
+
+const deployments = defineCommand({
+	meta: { name: "deployments", description: "Agent deployment timeline" },
+	subCommands: { list: deploymentsList },
+});
+
+const rollback = defineCommand({
+	meta: { name: "rollback", description: "Roll back an agent to a previous version" },
+	args: {
+		agent: { type: "positional", description: "Agent name or id", required: true },
+		to: {
+			type: "string",
+			description: "Target version (e.g. v3 or 3); default = the previously live version",
+		},
+		json: { type: "boolean" },
+		server: { type: "string" },
+	},
+	async run({ args }) {
+		requireAuth(args);
+		try {
+			// Match the API contract: a version number (`3`/`v3`) is sent as a number;
+			// anything else (a version id) is sent as-is. citty leaves --to a string.
+			let to: number | string | undefined;
+			if (args.to != null) {
+				const m = String(args.to).match(/^v?(\d+)$/i);
+				to = m ? Number(m[1]) : args.to;
+			}
+			const res = await apiFetch(
+				resolveServer(args),
+				`/agents/${encodeURIComponent(args.agent)}/rollback`,
+				{
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(to !== undefined ? { to } : {}),
+				},
+			);
+			const data = (await res.json()) as { id: string; name: string; version: number };
+			outputSuccess(data, c.green(`Rolled back ${data.name} to v${data.version}`), args);
+		} catch (err) {
+			handleError(err);
+		}
+	},
 });
 
 // ── Commands: sessions ──────────────────────────────────────────────
@@ -2567,6 +2724,9 @@ const main = defineCommand({
 		deploy,
 		chat,
 		agents,
+		versions,
+		deployments,
+		rollback,
 		sessions,
 		logs,
 		steer,
