@@ -1,6 +1,6 @@
 {
   "name": "@parel/security-basic",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "PAREL plugin for basic command and secret safety checks.",
   "license": "MIT",
   "repository": {

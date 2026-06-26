@@ -1,5 +1,12 @@
 # @parel/security-basic
 
+## 0.1.12
+
+### Patch Changes
+
+- Updated dependencies [440f4b9]
+  - @parel/plugin-sdk@0.7.0
+
 ## 0.1.11
 
 ### Patch Changes
