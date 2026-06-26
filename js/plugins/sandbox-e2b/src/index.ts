@@ -135,6 +135,10 @@ export default definePlugin({
 		const timeout = (ctx.config.timeout as number) ?? 300_000;
 
 		const apiKey = ctx.config.apiKey as string | undefined;
+		// Sandbox-level env vars injected at cold-start, persistent across every
+		// command in the sandbox (no per-command prefix needed) — lets the host
+		// hand the in-sandbox process its credentials/config at boot time.
+		const envs = (ctx.config.env as Record<string, string> | undefined) ?? {};
 		let sandbox: Sandbox | null = null;
 
 		function requireSandbox(): Sandbox {
@@ -147,7 +151,7 @@ export default definePlugin({
 				ctx.log.warn("E2B API key not provided — skipping sandbox creation");
 				return null;
 			}
-			const s = await Sandbox.create(template, { timeoutMs: timeout, apiKey });
+			const s = await Sandbox.create(template, { timeoutMs: timeout, apiKey, envs });
 			await ctx.store.set(STORE_KEY, s.sandboxId);
 			ctx.log.info(`E2B sandbox created: ${s.sandboxId}`);
 			return s;

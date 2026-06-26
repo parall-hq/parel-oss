@@ -112,7 +112,20 @@ describe("@parel/sandbox-e2b", () => {
 		expect(sandboxMock.create).toHaveBeenCalledWith("base", {
 			timeoutMs: 60_000,
 			apiKey: "test-key",
+			envs: {},
 		});
+	});
+
+	it("injects config.env into the sandbox at cold-start", async () => {
+		const sandbox = makeSandbox();
+		sandboxMock.create.mockResolvedValue(sandbox);
+		const h = makeHarness({ apiKey: "test-key", env: { FOO: "bar", TOKEN: "abc" } });
+		await sandboxE2bPlugin.setup(h.ctx);
+		await h.hooks.get(LifecycleEvent.SessionStart)?.();
+		expect(sandboxMock.create).toHaveBeenCalledWith(
+			"base",
+			expect.objectContaining({ envs: { FOO: "bar", TOKEN: "abc" } }),
+		);
 	});
 
 	it("keeps legacy bash and file tools", async () => {
