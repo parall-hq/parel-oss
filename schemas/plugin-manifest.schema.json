@@ -74,6 +74,14 @@
       },
       "additionalProperties": false
     },
+    "consumes": {
+      "type": "object",
+      "description": "Opt-in consumption declarations. invocationContext:true lets this plugin receive the per-turn invocation context on its tool contexts (ToolHandlerContext). Default off; declaring it is treated as authorization. Hook-context delivery is a later phase. Design: docs/invocation-context.md.",
+      "properties": {
+        "invocationContext": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
     "config": {
       "type": "object",
       "additionalProperties": true

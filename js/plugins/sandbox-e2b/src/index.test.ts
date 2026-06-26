@@ -146,6 +146,74 @@ describe("@parel/sandbox-e2b", () => {
 		expect(sandbox.files.read).toHaveBeenCalledWith("/tmp/x");
 	});
 
+	it("injects per-turn invocation context as per-command env on bash", async () => {
+		const sandbox = makeSandbox();
+		sandbox.commands.run.mockResolvedValue({ exitCode: 0, stdout: "ok\n", stderr: "" });
+		sandboxMock.create.mockResolvedValue(sandbox);
+		const h = makeHarness();
+		await sandboxE2bPlugin.setup(h.ctx);
+		await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+		const ctxWithInvocation = {
+			...toolCtx,
+			invocationContext: {
+				inputId: "in_1",
+				turnId: "t_1",
+				// non-string value must be JSON-stringified into the env
+				context: { PRLL_CHAT_ID: "chat_9", PRLL_SEQ: 7 },
+			},
+		} as never;
+		expect(
+			await h.tools.get("bash")?.({ command: "parall messages send hi" }, ctxWithInvocation),
+		).toBe("ok\n");
+		expect(sandbox.commands.run).toHaveBeenCalledWith("parall messages send hi", {
+			envs: { PRLL_CHAT_ID: "chat_9", PRLL_SEQ: "7" },
+		});
+	});
+
+	it("merges cold-start config.env under per-turn invocation env on bash", async () => {
+		const sandbox = makeSandbox();
+		sandbox.commands.run.mockResolvedValue({ exitCode: 0, stdout: "ok\n", stderr: "" });
+		sandboxMock.create.mockResolvedValue(sandbox);
+		const h = makeHarness({
+			apiKey: "test-key",
+			env: { BASE_TOKEN: "static", PRLL_CHAT_ID: "old" },
+		});
+		await sandboxE2bPlugin.setup(h.ctx);
+		await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+		const ctxWithInvocation = {
+			...toolCtx,
+			invocationContext: { inputId: "i", turnId: "t", context: { PRLL_CHAT_ID: "new" } },
+		} as never;
+		await h.tools.get("bash")?.({ command: "env" }, ctxWithInvocation);
+		// Static config.env is preserved; the per-turn value wins on a key conflict.
+		expect(sandbox.commands.run).toHaveBeenCalledWith("env", {
+			envs: { BASE_TOKEN: "static", PRLL_CHAT_ID: "new" },
+		});
+	});
+
+	it("treats an explicit null context value as a clear, not a fallback to config.env", async () => {
+		const sandbox = makeSandbox();
+		sandbox.commands.run.mockResolvedValue({ exitCode: 0, stdout: "ok\n", stderr: "" });
+		sandboxMock.create.mockResolvedValue(sandbox);
+		const h = makeHarness({ apiKey: "test-key", env: { PRLL_CHAT_ID: "static" } });
+		await sandboxE2bPlugin.setup(h.ctx);
+		await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+		const ctxWithNull = {
+			...toolCtx,
+			invocationContext: { inputId: "i", turnId: "t", context: { PRLL_CHAT_ID: null } },
+		} as never;
+		await h.tools.get("bash")?.({ command: "env" }, ctxWithNull);
+		// Explicit null clears the key (empty string) instead of leaking the static value.
+		expect(sandbox.commands.run).toHaveBeenCalledWith("env", { envs: { PRLL_CHAT_ID: "" } });
+	});
+
+	it("declares it consumes invocation context in the static manifest", () => {
+		expect(sandboxE2bPlugin.consumes?.invocationContext).toBe(true);
+	});
+
 	it("provides the standard parel.sandbox capability", async () => {
 		const sandbox = makeSandbox();
 		sandbox.commands.run.mockResolvedValue({ exitCode: 0, stdout: "hello\n", stderr: "" });

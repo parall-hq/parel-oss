@@ -11,6 +11,7 @@ interface PluginDefinition {
 	provides?: ParelPlugin["provides"];
 	requires?: ParelPlugin["requires"];
 	execution?: ParelPlugin["execution"];
+	consumes?: ParelPlugin["consumes"];
 	setup(ctx: PluginContext): Promise<void>;
 	teardown?(ctx: PluginContext): Promise<void>;
 }
@@ -22,6 +23,7 @@ export function definePlugin(definition: PluginDefinition): ParelPlugin {
 		...(definition.provides ? { provides: definition.provides } : {}),
 		...(definition.requires ? { requires: definition.requires } : {}),
 		...(definition.execution ? { execution: definition.execution } : {}),
+		...(definition.consumes ? { consumes: definition.consumes } : {}),
 		setup: definition.setup,
 		teardown: definition.teardown,
 	};

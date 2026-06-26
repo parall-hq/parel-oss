@@ -7,7 +7,12 @@ import {
 	type SandboxProcessResult,
 	type SandboxShellOptions,
 } from "@parel/capability-sandbox";
-import { definePlugin, LifecycleEvent, type ParelPlugin } from "@parel/plugin-sdk";
+import {
+	definePlugin,
+	type InvocationContext,
+	LifecycleEvent,
+	type ParelPlugin,
+} from "@parel/plugin-sdk";
 // Single source of truth for this plugin's static manifest (the secrets it needs).
 // Shipped at the package root (see package.json `files`) so the host can read it from
 // a CDN (jsDelivr) at deploy time — without loading the plugin — to drive credential
@@ -17,6 +22,24 @@ import manifest from "../parel.plugin.json" with { type: "json" };
 const STORE_KEY = "e2b_sandbox_id";
 const PROCESS_STORE_PREFIX = "e2b_process:";
 const PORT_STORE_PREFIX = "e2b_port:";
+
+/**
+ * Flatten a per-turn invocation context into string env vars for a single command
+ * execution. The platform only delivers structured context; turning it into env
+ * (string-only) is this plugin's job. Non-string values are JSON-stringified; an
+ * explicit `null` is a clear (empty string), so every key the turn provides overrides
+ * the cold-start `config.env` rather than falling back to its static value.
+ * Design: docs/invocation-context.md §6.
+ */
+function invocationEnv(invocation?: InvocationContext): Record<string, string> | undefined {
+	if (!invocation) return undefined;
+	const env: Record<string, string> = {};
+	for (const [key, value] of Object.entries(invocation.context)) {
+		if (value === undefined) continue; // absent key → inherit cold-start env
+		env[key] = value === null ? "" : typeof value === "string" ? value : JSON.stringify(value);
+	}
+	return Object.keys(env).length > 0 ? env : undefined;
+}
 
 type ProcessStatus = "running" | "stopped" | "unknown";
 
@@ -129,6 +152,7 @@ export default definePlugin({
 	provides: manifest.provides as ParelPlugin["provides"],
 	requires: manifest.requires as ParelPlugin["requires"],
 	execution: manifest.execution as ParelPlugin["execution"],
+	consumes: manifest.consumes as ParelPlugin["consumes"],
 
 	async setup(ctx) {
 		const template = (ctx.config.template as string) ?? "base";
@@ -232,9 +256,23 @@ export default definePlugin({
 			},
 		};
 
+		// Per-turn invocation context only reaches the sandbox through the local `bash`
+		// tool (which passes `toolCtx.invocationContext` below). Plugins that consume the
+		// provided `exec` capability via `ctx.require("exec")` (e.g. @parel/shell-tools,
+		// @parel/process-tools) call `run(command)` without it, so their commands do not
+		// get per-turn env in P0. Threading invocation through the capability route needs
+		// per-turn delivery into the warm runtime plus each consumer forwarding it — a
+		// follow-up (P1). Design: docs/invocation-context.md §6.
 		const exec = {
-			async run(command: string): Promise<string> {
-				const result = await requireSandbox().commands.run(command);
+			async run(command: string, invocation?: InvocationContext): Promise<string> {
+				const turnEnv = invocationEnv(invocation);
+				// E2B per-command `envs` shadow the sandbox's cold-start envs, so merge the
+				// configured sandbox env (`config.env`) underneath the per-turn values — the
+				// per-turn invocation context wins on key conflicts.
+				const commandEnv = turnEnv ? { ...envs, ...turnEnv } : undefined;
+				const result = commandEnv
+					? await requireSandbox().commands.run(command, { envs: commandEnv })
+					: await requireSandbox().commands.run(command);
 				if (result.exitCode !== 0 && result.stderr) {
 					return `Exit code: ${result.exitCode}\n${result.stderr}`;
 				}
@@ -448,7 +486,7 @@ export default definePlugin({
 					required: ["command"],
 				},
 			},
-			async (params) => exec.run(params.command as string),
+			async (params, toolCtx) => exec.run(params.command as string, toolCtx.invocationContext),
 		);
 
 		ctx.tool(

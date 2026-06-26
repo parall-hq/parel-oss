@@ -35,6 +35,7 @@ export type {
 	ImagePart,
 	InputQueue,
 	InputQueueItem,
+	InvocationContext,
 	JsonSchema7,
 	LifecycleEventType,
 	ListExecutionSnapshotsOptions,

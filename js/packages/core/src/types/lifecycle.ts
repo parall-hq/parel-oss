@@ -99,6 +99,9 @@ interface HookContextBase {
 	store: SessionStore;
 	inputs: InputQueue;
 	tools: HookToolOps;
+	// NOTE: per-turn invocation context on hook contexts (for policy/channel plugins)
+	// lands in P1, together with host-side per-hook gated delivery — not exposed here
+	// until that path is wired. Design: docs/invocation-context.md §10.
 }
 
 export type HookContext<E extends LifecycleEventType> = { event: E } & HookContextBase &
