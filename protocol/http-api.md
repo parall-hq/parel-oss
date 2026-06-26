@@ -28,7 +28,7 @@ re-points the active version without creating a new one.
 | `GET` | `/agents` | none | List agents. |
 | `GET` | `/agents/{idOrName}` | none | Get agent details and active config. Accepts id or name. |
 | `PUT` | `/agents/{agentId}` | raw `agent.yaml`, or JSON (below) | Id-addressed deploy: a new version of an existing agent. Never renames; `agents.name` is the identity and `agent.name` in the config is not validated here. |
-| `DELETE` | `/agents/{agentId}` | none | Delete an agent (cascades its versions, deployments, and agent-scoped secrets). |
+| `DELETE` | `/agents/{idOrName}` | none | Delete an agent by id or name (cascades its versions, deployments, and agent-scoped secrets). |
 | `GET` | `/agents/{idOrName}/versions` | none | List versions, newest first (`active: true` marks the live one). |
 | `GET` | `/agents/{idOrName}/deployments` | none | List the deployment timeline (`kind`: `deploy` \| `rollback`), newest first. |
 | `POST` | `/agents/{idOrName}/rollback` | `{ "to": 3 }` (version number or id; omit for the previously live version) | Make an existing version live again. |
