@@ -22,6 +22,8 @@ export interface ParelPlugin {
 	requires?: PluginManifest["requires"];
 	/** Execution snapshot/branch policy metadata declared by the plugin. */
 	execution?: PluginManifest["execution"];
+	/** Opt-in consumption declarations (e.g. per-turn invocation context). */
+	consumes?: PluginManifest["consumes"];
 	setup(ctx: PluginContext): Promise<void>;
 	teardown?(ctx: PluginContext): Promise<void>;
 }
@@ -102,6 +104,16 @@ export interface PluginManifest {
 		 * UIs and error messages; `required` defaults to true.
 		 */
 		secrets?: Record<string, { description: string; required?: boolean }>;
+	};
+	/**
+	 * Opt-in consumption declarations. `invocationContext: true` lets this plugin
+	 * receive the per-turn invocation context on its tool contexts
+	 * (`ToolHandlerContext.invocationContext`). Default off — declaring it is treated as
+	 * authorization (the agent author opted in by adding the plugin). Hook-context
+	 * delivery for policy/channel plugins is a later phase. Design: docs/invocation-context.md §5.
+	 */
+	consumes?: {
+		invocationContext?: boolean;
 	};
 	execution?: {
 		snapshot?: {

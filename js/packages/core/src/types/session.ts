@@ -203,6 +203,13 @@ export interface InputQueueItem {
 	payload: unknown;
 	source: string;
 	timestamp: number;
+	/**
+	 * Opaque per-input invocation context: non-transcript, JSON-able metadata the
+	 * ingress carries (e.g. routing identifiers). Snapshotted onto the turn and
+	 * delivered to consuming plugins via `InvocationContext`. The platform does not
+	 * interpret its keys. Design: docs/invocation-context.md.
+	 */
+	context?: Record<string, unknown>;
 }
 
 export interface InputQueue {
@@ -266,11 +273,31 @@ export interface PluginLogger {
 	error(message: string, data?: unknown): void;
 }
 
+/**
+ * Per-turn invocation context: the opaque, non-transcript metadata carried by the
+ * turn's originating input (see `InputQueueItem.context`), snapshotted at turn
+ * start and immutable for the turn. Injected only into the tool contexts of plugins
+ * that declare `consumes.invocationContext` (hook-context delivery is a later phase).
+ *
+ * Distinct from `ToolInvocationIdentity` (runtime-owned tool-call identity) — do
+ * not conflate. Design: docs/invocation-context.md.
+ */
+export interface InvocationContext {
+	inputId: string;
+	turnId: string;
+	context: Record<string, unknown>;
+}
+
 export interface ToolHandlerContext {
 	session: Readonly<SessionState>;
 	store: SessionStore;
 	log: PluginLogger;
 	invocation?: ToolInvocationIdentity;
+	/**
+	 * Per-turn invocation context; present only when this plugin's manifest
+	 * declares `consumes.invocationContext`. Design: docs/invocation-context.md.
+	 */
+	invocationContext?: InvocationContext;
 }
 
 export type ToolHandler = (

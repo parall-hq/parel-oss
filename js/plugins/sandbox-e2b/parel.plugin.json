@@ -17,6 +17,9 @@
       }
     }
   },
+  "consumes": {
+    "invocationContext": true
+  },
   "config": {
     "template": "Optional E2B sandbox template name (defaults to \"base\").",
     "timeout": "Optional create timeout in milliseconds (defaults to 300000).",
