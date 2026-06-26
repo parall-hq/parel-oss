@@ -18,13 +18,21 @@ Errors use [../schemas/api-error.schema.json](../schemas/api-error.schema.json).
 
 ## Agents
 
+An agent is identified by its **name** (unique per org). Each deploy creates an
+immutable **version** (`vN`); a **deployment** event puts a version live; rollback
+re-points the active version without creating a new one.
+
 | Method | Path | Body | Description |
 | --- | --- | --- | --- |
-| `POST` | `/agents` | raw `agent.yaml`, or JSON (below) | Create an agent. |
+| `POST` | `/agents` | raw `agent.yaml`, or JSON (below) | Deploy: upsert by `(org, name)`. A new name creates the agent at `v1`; an existing name creates a new version and makes it live. Returns `{ id, name, version }` (`201` create, `200` update). |
 | `GET` | `/agents` | none | List agents. |
-| `GET` | `/agents/{agentId}` | none | Get agent details and config. |
-| `PUT` | `/agents/{agentId}` | raw `agent.yaml`, or JSON (below) | Replace agent config. |
-| `DELETE` | `/agents/{agentId}` | none | Delete an agent (cascades its agent-scoped secrets). |
+| `GET` | `/agents/{idOrName}` | none | Get agent details and active config. Accepts id or name. |
+| `PUT` | `/agents/{agentId}` | raw `agent.yaml`, or JSON (below) | Id-addressed deploy: a new version of an existing agent. Never renames; `agents.name` is the identity and `agent.name` in the config is not validated here. |
+| `DELETE` | `/agents/{agentId}` | none | Delete an agent (cascades its versions, deployments, and agent-scoped secrets). |
+| `GET` | `/agents/{idOrName}/versions` | none | List versions, newest first (`active: true` marks the live one). |
+| `GET` | `/agents/{idOrName}/deployments` | none | List the deployment timeline (`kind`: `deploy` \| `rollback`), newest first. |
+| `POST` | `/agents/{idOrName}/rollback` | `{ "to": 3 }` (version number or id; omit for the previously live version) | Make an existing version live again. |
+| `POST` | `/agents/{idOrName}/rename` | `{ "name": "new-name" }` | Rename in place (keeps id, versions, sessions). `409` if the name is taken. |
 
 The JSON deploy form carries the config plus optional sidecars:
 
