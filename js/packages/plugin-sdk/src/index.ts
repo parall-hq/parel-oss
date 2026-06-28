@@ -108,9 +108,11 @@ export type {
 	ChannelDelivery,
 	ConnectorContext,
 	ConnectorEffect,
+	ConnectorStore,
 	ConnectRequest,
 	ProviderHttpRequest,
 	WebhookRequest,
 	WebSocketFrame,
 } from "./channel.js";
+export { defineChannelConnector } from "./channel.js";
 export { definePlugin } from "./define-plugin.js";
