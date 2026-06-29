@@ -70,6 +70,7 @@ describe("@parel/channel-slack-socket", () => {
 				type: "slack.message",
 				subject: "C1:1710000000.000100",
 				actor: "U1",
+				data: { text: "hello" },
 				replyRoute: {
 					kind: "provider_http",
 					connectionId: "chn_1",
@@ -82,6 +83,116 @@ describe("@parel/channel-slack-socket", () => {
 				},
 			},
 		});
+	});
+
+	it("extracts app_mention text verbatim (mention kept; needs no bot id to be safe)", async () => {
+		const effects = await connector.onMessage?.(
+			{
+				data: JSON.stringify({
+					envelope_id: "env_2",
+					type: "events_api",
+					payload: {
+						event_id: "Ev456",
+						team_id: "T1",
+						event: {
+							type: "app_mention",
+							channel: "C1",
+							user: "U1",
+							ts: "1710000000.000200",
+							text: "<@U0BOT> please reply PONG",
+						},
+					},
+				}),
+			},
+			ctx(),
+		);
+
+		expect(effects?.[1]).toMatchObject({
+			type: "emitEvent",
+			event: {
+				type: "slack.app_mention",
+				data: { text: "<@U0BOT> please reply PONG" },
+			},
+		});
+	});
+
+	it("keeps user mentions in a normal message (only app_mention strips the prefix)", async () => {
+		const effects = await connector.onMessage?.(
+			{
+				data: JSON.stringify({
+					envelope_id: "env_3",
+					type: "events_api",
+					payload: {
+						event_id: "Ev789",
+						team_id: "T1",
+						event: {
+							type: "message",
+							channel: "C1",
+							user: "U1",
+							ts: "1710000000.000300",
+							text: "<@U999> please review",
+						},
+					},
+				}),
+			},
+			ctx(),
+		);
+
+		expect(effects?.[1]).toMatchObject({
+			type: "emitEvent",
+			event: { type: "slack.message", data: { text: "<@U999> please review" } },
+		});
+	});
+
+	it("does not surface the bot's own message text for interactive payloads", async () => {
+		const effects = await connector.onMessage?.(
+			{
+				data: JSON.stringify({
+					envelope_id: "env_4",
+					type: "interactive",
+					payload: {
+						type: "block_actions",
+						trigger_id: "trig_1",
+						channel: { id: "C1" },
+						message: { text: "Approve deployment?" },
+						actions: [{ action_id: "approve", value: "yes" }],
+					},
+				}),
+			},
+			ctx(),
+		);
+
+		// payload.message.text is the bot's prompt, not the human's action → not surfaced as
+		// data.text; data falls back to the raw payload for the agent to inspect.
+		const event = (effects?.[1] as { event?: { data?: { text?: unknown } } })?.event;
+		expect(event?.data?.text).toBeUndefined();
+	});
+
+	it("does not promote bot-authored message text as the human message", async () => {
+		const effects = await connector.onMessage?.(
+			{
+				data: JSON.stringify({
+					envelope_id: "env_5",
+					type: "events_api",
+					payload: {
+						event_id: "Ev999",
+						team_id: "T1",
+						event: {
+							type: "message",
+							subtype: "bot_message",
+							bot_id: "B123",
+							channel: "C1",
+							ts: "1710000000.000400",
+							text: "automated notice from another app",
+						},
+					},
+				}),
+			},
+			ctx(),
+		);
+
+		const event = (effects?.[1] as { event?: { data?: { text?: unknown } } })?.event;
+		expect(event?.data?.text).toBeUndefined();
 	});
 
 	it("builds Slack Web API delivery effects", async () => {

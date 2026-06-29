@@ -73,6 +73,39 @@ function responseUrl(body: unknown): string | undefined {
 	return stringAt(body, "payload.response_url");
 }
 
+function slackMessageText(body: unknown): string | undefined {
+	const eventType = stringAt(body, "payload.event.type");
+	// Only human-authored message / app_mention text becomes the transcript message. Skip
+	// bot-authored events (bot_id, or subtype "bot_message") so a host doesn't treat an app's
+	// own message as human input. Text is kept verbatim, including any leading bot mention:
+	// stripping it reliably needs the bot's user id (the leading mention isn't guaranteed to
+	// be the bot, e.g. "<@U123> ask <@bot> ..."), which isn't known here. slash_commands carry
+	// the human arg in payload.text; an interactive payload's message.text is the bot's prompt
+	// and is never surfaced.
+	if (eventType === "message" || eventType === "app_mention") {
+		if (
+			stringAt(body, "payload.event.bot_id") !== undefined ||
+			stringAt(body, "payload.event.subtype") === "bot_message"
+		) {
+			return undefined;
+		}
+		return stringAt(body, "payload.event.text")?.trim() || undefined;
+	}
+	if (stringAt(body, "payload.command") !== undefined) {
+		return stringAt(body, "payload.text")?.trim() || undefined;
+	}
+	return undefined;
+}
+
+// envelope.data exposes a top-level `text` (the human message) alongside the raw `payload`,
+// so a host materializing the event into a transcript shows the message rather than the whole
+// provider envelope. Events without text (reactions, etc.) keep the raw payload as data.
+function slackEnvelopeData(body: unknown): unknown {
+	const text = slackMessageText(body);
+	const payload = slackPayload(body) ?? body;
+	return text !== undefined ? { text, payload } : payload;
+}
+
 export function envelopeFromSocketFrame(
 	ctx: ConnectorContext,
 	body: unknown,
@@ -87,7 +120,7 @@ export function envelopeFromSocketFrame(
 		type: slackEventType(body),
 		subject,
 		actor: slackActor(body),
-		data: slackPayload(body) ?? body,
+		data: slackEnvelopeData(body),
 		replyRoute: {
 			kind: "provider_http",
 			connectionId: ctx.connectionId,
