@@ -1,5 +1,12 @@
 # @parel/memory-rolling-summary
 
+## 0.1.10
+
+### Patch Changes
+
+- Updated dependencies [73afdb1]
+  - @parel/plugin-sdk@0.8.0
+
 ## 0.1.9
 
 ### Patch Changes
