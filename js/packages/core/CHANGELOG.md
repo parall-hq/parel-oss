@@ -1,5 +1,11 @@
 # @parel/core
 
+## 0.12.0
+
+### Minor Changes
+
+- 3eedc5e: `ChannelEnvelope` gains an optional `context` field: per-turn invocation context a channel connector attaches to its emitted envelope, snapshotted at turn start and exposed to consume-gated plugins (e.g. flattened into sandbox per-exec env).
+
 ## 0.11.0
 
 ### Minor Changes
