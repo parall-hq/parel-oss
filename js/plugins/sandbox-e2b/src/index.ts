@@ -1,4 +1,4 @@
-import { Sandbox } from "@e2b/code-interpreter";
+import { CommandExitError, type CommandResult, Sandbox } from "@e2b/code-interpreter";
 import {
 	PAREL_SANDBOX_CAPABILITY,
 	type SandboxCapability,
@@ -144,6 +144,23 @@ function applyShellOptions(
 function limitOutput(value: string, maxOutputChars?: number): string {
 	if (!maxOutputChars || value.length <= maxOutputChars) return value;
 	return value.slice(0, maxOutputChars);
+}
+
+/**
+ * e2b SDK 2.x throws `CommandExitError` on any non-zero exit (1.x returned the
+ * result), and the error message is an unhelpful "exit status N". Every
+ * foreground caller here wants the 1.x contract back — a failing command is a
+ * RESULT the agent should see (stderr, exit code), not a tool crash.
+ * `CommandExitError` implements `CommandResult`, so the error object itself is
+ * the result. Anything else (timeouts, disconnects) still throws.
+ */
+async function runToResult(run: Promise<CommandResult>): Promise<CommandResult> {
+	try {
+		return await run;
+	} catch (err) {
+		if (err instanceof CommandExitError) return err;
+		throw err;
+	}
 }
 
 export default definePlugin({
@@ -296,9 +313,11 @@ export default definePlugin({
 				// configured sandbox env (`config.env`) underneath the per-turn values — the
 				// per-turn invocation context wins on key conflicts.
 				const commandEnv = turnEnv ? { ...envs, ...turnEnv } : undefined;
-				const result = commandEnv
-					? await requireSandbox().commands.run(command, { envs: commandEnv })
-					: await requireSandbox().commands.run(command);
+				const result = await runToResult(
+					commandEnv
+						? requireSandbox().commands.run(command, { envs: commandEnv })
+						: requireSandbox().commands.run(command),
+				);
 				if (result.exitCode !== 0 && result.stderr) {
 					return `Exit code: ${result.exitCode}\n${result.stderr}`;
 				}
@@ -311,7 +330,7 @@ export default definePlugin({
 			opts?: SandboxExecOptions | SandboxShellOptions,
 		): Promise<SandboxProcessResult> {
 			if (!sandbox) throw new Error("E2B sandbox not available");
-			const result = await sandbox.commands.run(applyShellOptions(command, opts));
+			const result = await runToResult(sandbox.commands.run(applyShellOptions(command, opts)));
 			return {
 				stdout: limitOutput(result.stdout, opts?.maxOutputChars),
 				stderr: limitOutput(result.stderr, opts?.maxOutputChars),
