@@ -1,6 +1,6 @@
 {
   "name": "@parel/process-tools",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Workspace background process tools for PAREL coding agents.",
   "license": "MIT",
   "repository": {

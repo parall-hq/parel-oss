@@ -1,6 +1,6 @@
 {
   "name": "@parel/sandbox-daytona",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "PAREL sandbox capability provider plugin for Daytona.",
   "license": "MIT",
   "repository": {

@@ -1,6 +1,6 @@
 {
   "name": "@parel/steering-immediate",
-  "version": "0.0.16",
+  "version": "0.0.17",
   "description": "PAREL plugin for immediate steering and interruption inputs.",
   "license": "MIT",
   "repository": {

@@ -1,6 +1,6 @@
 {
   "name": "@parel/sandbox-vercel",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "PAREL sandbox capability provider plugin for Vercel Sandbox.",
   "license": "MIT",
   "repository": {
