@@ -1,5 +1,12 @@
 # @parel/security-basic
 
+## 0.1.15
+
+### Patch Changes
+
+- Updated dependencies [c838bce]
+  - @parel/plugin-sdk@0.10.0
+
 ## 0.1.14
 
 ### Patch Changes
