@@ -12,7 +12,17 @@ export type ConnectorEffect =
 	| { type: "emitEvent"; event: ChannelEnvelope }
 	| { type: "setTimer"; key: string; at: number }
 	| { type: "fetch"; request: ProviderHttpRequest; idempotencyKey?: string }
-	| { type: "close"; reason?: string };
+	| { type: "close"; reason?: string }
+	/**
+	 * Resolve an ExecutionPause surfaced via the `execution_paused` agent event (the
+	 * human-in-the-loop decision backflow). Platform-executed with host-side authz —
+	 * the pause must belong to this connection's org and to a session this connection
+	 * routed to; the connector never holds platform credentials. `approve: true`
+	 * resumes (the session unblocks; it does not auto-continue the interrupted tool
+	 * call), `approve: false` cancels. `comment` is recorded in the pause's resume
+	 * payload for audit. Resolving an already-resolved pause is a no-op.
+	 */
+	| { type: "resolvePause"; pauseId: string; approve: boolean; comment?: string };
 
 export interface ConnectRequest {
 	url: string;
