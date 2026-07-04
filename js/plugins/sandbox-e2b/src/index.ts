@@ -157,6 +157,18 @@ export default definePlugin({
 	async setup(ctx) {
 		const template = (ctx.config.template as string) ?? "base";
 		const timeout = (ctx.config.timeout as number) ?? 300_000;
+		// Persistence: when enabled, the sandbox auto-PAUSES on timeout instead
+		// of being killed — the filesystem survives across turns/sessions and
+		// the existing reconnect path (`Sandbox.connect`) transparently resumes
+		// it. Off by default: paused snapshots are retained by E2B indefinitely
+		// (storage accrues until `kill()`), so opting in is a billing decision.
+		// `timeout` then means "idle time before pause", not time-to-death.
+		const persistence = ctx.config.persistence === true;
+		// keepMemory=false (default) stores a filesystem-only snapshot: resume
+		// cold-boots from disk (processes/connections are NOT restored), which
+		// is cheaper to store and the honest contract for per-turn execution.
+		// Set true to snapshot memory too (warm resume, larger snapshot).
+		const keepMemory = ctx.config.keepMemory === true;
 
 		const apiKey = ctx.config.apiKey as string | undefined;
 		// Sandbox-level env vars injected at cold-start, persistent across every
@@ -175,14 +187,28 @@ export default definePlugin({
 				ctx.log.warn("E2B API key not provided — skipping sandbox creation");
 				return null;
 			}
-			const s = await Sandbox.create(template, { timeoutMs: timeout, apiKey, envs });
+			const s = await Sandbox.create(template, {
+				timeoutMs: timeout,
+				apiKey,
+				envs,
+				...(persistence
+					? { lifecycle: { onTimeout: { action: "pause" as const, keepMemory } } }
+					: {}),
+			});
 			await ctx.store.set(STORE_KEY, s.sandboxId);
-			ctx.log.info(`E2B sandbox created: ${s.sandboxId}`);
+			ctx.log.info(
+				`E2B sandbox created: ${s.sandboxId}${persistence ? " (persistent: pause-on-timeout)" : ""}`,
+			);
 			return s;
 		}
 
 		async function reconnectSandbox(sandboxId: string): Promise<Sandbox | null> {
 			try {
+				// For a PAUSED sandbox (persistence mode) connect() transparently
+				// resumes it — with keepMemory=false that's a cold boot from the
+				// filesystem snapshot (a few seconds), with keepMemory=true a warm
+				// ~1s memory restore. A failed connect (expired/killed/corrupted
+				// snapshot) falls through to createSandbox() in the caller.
 				const s = await Sandbox.connect(sandboxId, { apiKey });
 				ctx.log.info(`Reconnected to E2B sandbox: ${sandboxId}`);
 				return s;
