@@ -104,6 +104,8 @@ export {
 	visibleText,
 } from "@parel/core";
 export type {
+	AgentEvent,
+	AgentEventEffect,
 	ChannelConnector,
 	ChannelDelivery,
 	ConnectorContext,
