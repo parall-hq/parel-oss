@@ -1,6 +1,6 @@
 {
   "name": "@parel/filesystem-tools",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Workspace-relative filesystem tools for PAREL coding agents.",
   "license": "MIT",
   "repository": {
