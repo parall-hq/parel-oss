@@ -313,4 +313,74 @@ describe("@parel/sandbox-e2b", () => {
 			required: true,
 		});
 	});
+
+	describe("persistence", () => {
+		it("persistence: true requests pause-on-timeout with a filesystem-only snapshot", async () => {
+			const sandbox = makeSandbox();
+			sandboxMock.create.mockResolvedValue(sandbox);
+			const h = makeHarness({ apiKey: "test-key", persistence: true });
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+			expect(sandboxMock.create).toHaveBeenCalledWith("base", {
+				timeoutMs: 300_000,
+				apiKey: "test-key",
+				envs: {},
+				lifecycle: { onTimeout: { action: "pause", keepMemory: false } },
+			});
+		});
+
+		it("keepMemory: true also snapshots memory", async () => {
+			const sandbox = makeSandbox();
+			sandboxMock.create.mockResolvedValue(sandbox);
+			const h = makeHarness({ apiKey: "test-key", persistence: true, keepMemory: true });
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+			expect(sandboxMock.create).toHaveBeenCalledWith(
+				"base",
+				expect.objectContaining({
+					lifecycle: { onTimeout: { action: "pause", keepMemory: true } },
+				}),
+			);
+		});
+
+		it("default config still creates without a lifecycle option (kill-on-timeout)", async () => {
+			const sandbox = makeSandbox();
+			sandboxMock.create.mockResolvedValue(sandbox);
+			const h = makeHarness();
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+			const opts = sandboxMock.create.mock.calls[0][1] as Record<string, unknown>;
+			expect("lifecycle" in opts).toBe(false);
+		});
+
+		it("session resume reconnects the stored sandbox id (paused sandboxes auto-resume)", async () => {
+			const sandbox = makeSandbox();
+			sandboxMock.connect.mockResolvedValue(sandbox);
+			const h = makeHarness({ apiKey: "test-key", persistence: true });
+			await sandboxE2bPlugin.setup(h.ctx);
+			h.store.set("e2b_sandbox_id", "sbx_paused");
+
+			await h.hooks.get(LifecycleEvent.SessionResume)?.();
+
+			expect(sandboxMock.connect).toHaveBeenCalledWith("sbx_paused", { apiKey: "test-key" });
+			expect(sandboxMock.create).not.toHaveBeenCalled();
+		});
+
+		it("resume falls back to a fresh sandbox when the snapshot is gone", async () => {
+			const sandbox = makeSandbox();
+			sandboxMock.connect.mockRejectedValue(new Error("sandbox not found"));
+			sandboxMock.create.mockResolvedValue(sandbox);
+			const h = makeHarness({ apiKey: "test-key", persistence: true });
+			await sandboxE2bPlugin.setup(h.ctx);
+			h.store.set("e2b_sandbox_id", "sbx_gone");
+
+			await h.hooks.get(LifecycleEvent.SessionResume)?.();
+
+			expect(sandboxMock.connect).toHaveBeenCalledTimes(1);
+			expect(sandboxMock.create).toHaveBeenCalledTimes(1);
+		});
+	});
 });
