@@ -15,11 +15,27 @@ const sandboxMock = vi.hoisted(() => ({
 	connect: vi.fn(),
 }));
 
+const FakeCommandExitError = vi.hoisted(
+	() =>
+		class FakeCommandExitError extends Error {
+			exitCode: number;
+			stdout: string;
+			stderr: string;
+			constructor(result: { exitCode: number; stdout: string; stderr: string }) {
+				super(`exit status ${result.exitCode}`);
+				this.exitCode = result.exitCode;
+				this.stdout = result.stdout;
+				this.stderr = result.stderr;
+			}
+		},
+);
+
 vi.mock("@e2b/code-interpreter", () => ({
 	Sandbox: {
 		create: sandboxMock.create,
 		connect: sandboxMock.connect,
 	},
+	CommandExitError: FakeCommandExitError,
 }));
 
 interface Harness {
@@ -311,6 +327,55 @@ describe("@parel/sandbox-e2b", () => {
 		expect(sandboxE2bPlugin.requires?.secrets?.apiKey).toEqual({
 			description: expect.stringContaining("E2B API key"),
 			required: true,
+		});
+	});
+
+	describe("non-zero exit (e2b SDK 2.x throws CommandExitError)", () => {
+		it("bash tool returns the failing command's output instead of crashing the tool", async () => {
+			const sandbox = makeSandbox();
+			sandbox.commands.run.mockRejectedValue(
+				new FakeCommandExitError({
+					exitCode: 1,
+					stdout: "",
+					stderr: "cat: /tmp/x: No such file or directory",
+				}),
+			);
+			sandboxMock.create.mockResolvedValue(sandbox);
+			const h = makeHarness();
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+			expect(await h.tools.get("bash")?.({ command: "cat /tmp/x" }, toolCtx)).toBe(
+				"Exit code: 1\ncat: /tmp/x: No such file or directory",
+			);
+		});
+
+		it("sandbox capability exec surfaces exitCode/stderr as a result", async () => {
+			const sandbox = makeSandbox();
+			sandbox.commands.run.mockRejectedValue(
+				new FakeCommandExitError({ exitCode: 2, stdout: "partial", stderr: "boom" }),
+			);
+			sandboxMock.create.mockResolvedValue(sandbox);
+			const h = makeHarness();
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+			const capability = h.provided.get(PAREL_SANDBOX_CAPABILITY) as SandboxCapability;
+			const result = await capability.process?.exec(["cat", "/tmp/x"]);
+			expect(result).toEqual({ stdout: "partial", stderr: "boom", exitCode: 2 });
+		});
+
+		it("non-exit errors (e.g. disconnect) still throw", async () => {
+			const sandbox = makeSandbox();
+			sandbox.commands.run.mockRejectedValue(new Error("sandbox disconnected"));
+			sandboxMock.create.mockResolvedValue(sandbox);
+			const h = makeHarness();
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+			await expect(h.tools.get("bash")?.({ command: "true" }, toolCtx)).rejects.toThrow(
+				"sandbox disconnected",
+			);
 		});
 	});
 
