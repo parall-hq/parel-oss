@@ -334,7 +334,11 @@ describe("@parel/sandbox-e2b", () => {
 		it("bash tool returns the failing command's output instead of crashing the tool", async () => {
 			const sandbox = makeSandbox();
 			sandbox.commands.run.mockRejectedValue(
-				new FakeCommandExitError({ exitCode: 1, stdout: "", stderr: "cat: /tmp/x: No such file or directory" }),
+				new FakeCommandExitError({
+					exitCode: 1,
+					stdout: "",
+					stderr: "cat: /tmp/x: No such file or directory",
+				}),
 			);
 			sandboxMock.create.mockResolvedValue(sandbox);
 			const h = makeHarness();
