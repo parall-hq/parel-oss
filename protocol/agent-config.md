@@ -111,3 +111,13 @@ plugin-owned workspace or sandbox paths and returned as refs.
 `runtime.checkpointInterval` controls internal checkpoint cadence.
 
 `runtime.reasoning` requests provider reasoning when supported. Providers differ in whether they expose text, summaries, signatures, or opaque replay artifacts. PAREL normalizes all exposed reasoning into `reasoning` message parts.
+
+`runtime.deploymentTracking` controls how a session relates to the agent's
+deployments after the session is created. `live` (the default) makes in-flight
+sessions adopt the active deployment's config and frozen plugin lock at turn
+boundaries — a redeploy reaches existing sessions from their next turn on, and
+each turn records the agent version it executed with. `pinned` keeps the
+creation-time snapshot for the session's whole life; use it for reproducible
+runs (evals, experiments). Sessions created by forking, branching, or replaying
+are always pinned regardless of this setting, since their meaning is "this
+exact configuration". Plugin versions never change mid-turn in either mode.

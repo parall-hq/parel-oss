@@ -52,6 +52,13 @@ export interface RuntimeConfig {
 		enabled: boolean;
 		budgetTokens?: number;
 	};
+	/**
+	 * How sessions relate to the agent's deployments after creation: "live"
+	 * (default) adopts the active deployment's config and frozen plugin lock at
+	 * turn boundaries; "pinned" keeps the creation-time snapshot for the
+	 * session's whole life. See protocol/agent-config.md.
+	 */
+	deploymentTracking?: "live" | "pinned";
 }
 
 export interface ResolvedPlugin {
