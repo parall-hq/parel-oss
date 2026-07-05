@@ -89,6 +89,11 @@
             }
           },
           "additionalProperties": false
+        },
+        "deploymentTracking": {
+          "type": "string",
+          "enum": ["live", "pinned"],
+          "description": "Whether sessions follow the agent's active deployment at turn boundaries (live, default) or keep their creation-time config and plugin lock forever (pinned)."
         }
       },
       "additionalProperties": false
