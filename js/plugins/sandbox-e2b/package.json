@@ -1,6 +1,6 @@
 {
   "name": "@parel/sandbox-e2b",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "PAREL sandbox plugin for E2B code interpreter execution.",
   "license": "MIT",
   "repository": {
