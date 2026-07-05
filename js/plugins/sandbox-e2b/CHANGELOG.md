@@ -1,5 +1,16 @@
 # @parel/sandbox-e2b
 
+## 0.3.1
+
+### Patch Changes
+
+- 16296de: Restore the 1.x contract for failing commands: e2b SDK 2.x throws
+  `CommandExitError` on any non-zero exit, which crashed the bash tool and
+  sandbox exec with an opaque "Dynamic plugin runtime /tool failed with 500:
+  exit status 1" instead of returning the command's stderr/exit code to the
+  agent. Foreground command paths now treat `CommandExitError` as the result
+  (it implements `CommandResult`); genuine transport errors still throw.
+
 ## 0.3.0
 
 ### Minor Changes
