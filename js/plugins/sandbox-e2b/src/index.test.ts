@@ -13,6 +13,7 @@ import sandboxE2bPlugin from "./index.js";
 const sandboxMock = vi.hoisted(() => ({
 	create: vi.fn(),
 	connect: vi.fn(),
+	kill: vi.fn(),
 }));
 
 const FakeCommandExitError = vi.hoisted(
@@ -34,6 +35,7 @@ vi.mock("@e2b/code-interpreter", () => ({
 	Sandbox: {
 		create: sandboxMock.create,
 		connect: sandboxMock.connect,
+		kill: sandboxMock.kill,
 	},
 	CommandExitError: FakeCommandExitError,
 }));
@@ -117,6 +119,7 @@ describe("@parel/sandbox-e2b", () => {
 	beforeEach(() => {
 		sandboxMock.create.mockReset();
 		sandboxMock.connect.mockReset();
+		sandboxMock.kill.mockReset();
 	});
 
 	it("creates a real sandbox on session:start using config", async () => {
@@ -303,24 +306,38 @@ describe("@parel/sandbox-e2b", () => {
 		await expect(ports.revoke(3000)).resolves.toBe(true);
 	});
 
-	it("without an API key, no sandbox is created and tools report unavailable", async () => {
+	it("without an API key, session start and tools fail loudly with the real reason", async () => {
 		const h = makeHarness({});
 		await sandboxE2bPlugin.setup(h.ctx);
-		await h.hooks.get(LifecycleEvent.SessionStart)?.();
-		expect(sandboxMock.create).not.toHaveBeenCalled();
-		await expect(h.tools.get("bash")?.({ command: "echo hi" }, toolCtx)).rejects.toThrow(
-			"not available",
+		await expect(h.hooks.get(LifecycleEvent.SessionStart)?.()).rejects.toThrow(
+			"E2B API key not provided",
 		);
+		await expect(h.tools.get("bash")?.({ command: "echo hi" }, toolCtx)).rejects.toThrow(
+			"E2B API key not provided",
+		);
+		expect(sandboxMock.create).not.toHaveBeenCalled();
 	});
 
 	it("destroys the sandbox on session:end", async () => {
 		const sandbox = makeSandbox();
 		sandboxMock.create.mockResolvedValue(sandbox);
+		sandboxMock.kill.mockResolvedValue(true);
 		const h = makeHarness();
 		await sandboxE2bPlugin.setup(h.ctx);
 		await h.hooks.get(LifecycleEvent.SessionStart)?.();
 		await h.hooks.get(LifecycleEvent.SessionEnd)?.();
-		expect(sandbox.kill).toHaveBeenCalledOnce();
+		expect(sandboxMock.kill).toHaveBeenCalledWith("sbx_1", { apiKey: "test-key" });
+		expect(h.store.has("e2b_sandbox_id")).toBe(false);
+	});
+
+	it("session:end kills the stored sandbox even without a live handle", async () => {
+		sandboxMock.kill.mockResolvedValue(true);
+		const h = makeHarness();
+		await sandboxE2bPlugin.setup(h.ctx);
+		h.store.set("e2b_sandbox_id", "sbx_orphan");
+		await h.hooks.get(LifecycleEvent.SessionEnd)?.();
+		expect(sandboxMock.kill).toHaveBeenCalledWith("sbx_orphan", { apiKey: "test-key" });
+		expect(h.store.has("e2b_sandbox_id")).toBe(false);
 	});
 
 	it("declares its apiKey secret requirement from the static manifest", () => {
@@ -438,14 +455,201 @@ describe("@parel/sandbox-e2b", () => {
 			const sandbox = makeSandbox();
 			sandboxMock.connect.mockRejectedValue(new Error("sandbox not found"));
 			sandboxMock.create.mockResolvedValue(sandbox);
+			sandboxMock.kill.mockResolvedValue(true);
 			const h = makeHarness({ apiKey: "test-key", persistence: true });
 			await sandboxE2bPlugin.setup(h.ctx);
 			h.store.set("e2b_sandbox_id", "sbx_gone");
 
 			await h.hooks.get(LifecycleEvent.SessionResume)?.();
 
-			expect(sandboxMock.connect).toHaveBeenCalledTimes(1);
+			// One retry before giving up on the stored sandbox.
+			expect(sandboxMock.connect).toHaveBeenCalledTimes(2);
 			expect(sandboxMock.create).toHaveBeenCalledTimes(1);
+			// The unreachable sandbox is reaped so its paused snapshot can't leak.
+			expect(sandboxMock.kill).toHaveBeenCalledWith("sbx_gone", { apiKey: "test-key" });
+			expect(h.store.get("e2b_sandbox_id")).toBe("sbx_1");
+		});
+
+		it("resume retries a transient reconnect failure before swapping the sandbox", async () => {
+			const sandbox = makeSandbox();
+			sandboxMock.connect
+				.mockRejectedValueOnce(new Error("network blip"))
+				.mockResolvedValueOnce(sandbox);
+			const h = makeHarness({ apiKey: "test-key", persistence: true });
+			await sandboxE2bPlugin.setup(h.ctx);
+			h.store.set("e2b_sandbox_id", "sbx_flaky");
+
+			await h.hooks.get(LifecycleEvent.SessionResume)?.();
+
+			expect(sandboxMock.connect).toHaveBeenCalledTimes(2);
+			// The filesystem was NOT reset: no fresh sandbox, no kill.
+			expect(sandboxMock.create).not.toHaveBeenCalled();
+			expect(sandboxMock.kill).not.toHaveBeenCalled();
+		});
+
+		it("does not kill the stored sandbox when its replacement fails to create", async () => {
+			sandboxMock.connect.mockRejectedValue(new Error("region outage"));
+			sandboxMock.create.mockRejectedValue(new Error("quota exceeded"));
+			const h = makeHarness({ apiKey: "test-key", persistence: true });
+			await sandboxE2bPlugin.setup(h.ctx);
+			h.store.set("e2b_sandbox_id", "sbx_saved");
+
+			await expect(h.hooks.get(LifecycleEvent.SessionResume)?.()).rejects.toThrow(
+				"Failed to create E2B sandbox: quota exceeded",
+			);
+			// The old snapshot must survive: kill only after a replacement exists,
+			// so a later attempt can still reconnect to the user's files.
+			expect(sandboxMock.kill).not.toHaveBeenCalled();
+			expect(h.store.get("e2b_sandbox_id")).toBe("sbx_saved");
+
+			// E2B recovers: the next tool call reconnects and the files are intact.
+			const sandbox = makeSandbox();
+			sandbox.commands.run.mockResolvedValue({ exitCode: 0, stdout: "intact\n", stderr: "" });
+			sandboxMock.connect.mockReset();
+			sandboxMock.connect.mockResolvedValue(sandbox);
+			expect(await h.tools.get("bash")?.({ command: "ls" }, toolCtx)).toBe("intact\n");
+			expect(sandboxMock.connect).toHaveBeenCalledWith("sbx_saved", { apiKey: "test-key" });
+		});
+	});
+
+	// The lifecycle hooks are the warm path; these cover the fallback when they
+	// were skipped or misfired (e.g. a dispatch short-circuit) and the sandbox
+	// field is still null when the first tool of the turn runs.
+	describe("self-healing on the tool call path", () => {
+		it("hooks never ran: the first tool call reconnects the stored sandbox", async () => {
+			const sandbox = makeSandbox();
+			sandbox.commands.run.mockResolvedValue({ exitCode: 0, stdout: "healed\n", stderr: "" });
+			sandboxMock.connect.mockResolvedValue(sandbox);
+			const h = makeHarness({ apiKey: "test-key", persistence: true });
+			await sandboxE2bPlugin.setup(h.ctx);
+			h.store.set("e2b_sandbox_id", "sbx_paused");
+
+			expect(await h.tools.get("bash")?.({ command: "echo hi" }, toolCtx)).toBe("healed\n");
+			expect(sandboxMock.connect).toHaveBeenCalledWith("sbx_paused", { apiKey: "test-key" });
+			expect(sandboxMock.create).not.toHaveBeenCalled();
+		});
+
+		it("hooks never ran and the stored sandbox is gone: the tool call swaps in a fresh one and reaps the old", async () => {
+			const sandbox = makeSandbox();
+			sandboxMock.connect.mockRejectedValue(new Error("sandbox not found"));
+			sandboxMock.create.mockResolvedValue(sandbox);
+			sandboxMock.kill.mockResolvedValue(true);
+			const h = makeHarness({ apiKey: "test-key", persistence: true });
+			await sandboxE2bPlugin.setup(h.ctx);
+			h.store.set("e2b_sandbox_id", "sbx_dead");
+
+			await h.tools.get("file_write")?.({ path: "/tmp/x", content: "data" }, toolCtx);
+
+			expect(sandboxMock.kill).toHaveBeenCalledWith("sbx_dead", { apiKey: "test-key" });
+			expect(h.store.get("e2b_sandbox_id")).toBe("sbx_1");
+			expect(sandbox.files.write).toHaveBeenCalledWith("/tmp/x", "data");
+		});
+
+		it("hooks never ran and nothing is stored: a capability call creates the sandbox", async () => {
+			const sandbox = makeSandbox();
+			sandbox.commands.run.mockResolvedValue({ exitCode: 0, stdout: "made\n", stderr: "" });
+			sandboxMock.create.mockResolvedValue(sandbox);
+			const h = makeHarness();
+			await sandboxE2bPlugin.setup(h.ctx);
+
+			const capability = h.provided.get(PAREL_SANDBOX_CAPABILITY) as SandboxCapability;
+			const result = await capability.process?.shell("echo hi");
+			expect(result).toMatchObject({ stdout: "made\n", exitCode: 0 });
+			expect(sandboxMock.create).toHaveBeenCalledTimes(1);
+			expect(sandboxMock.connect).not.toHaveBeenCalled();
+		});
+
+		it("concurrent tool calls share one in-flight recovery (single-flight)", async () => {
+			const sandbox = makeSandbox();
+			sandbox.commands.run.mockResolvedValue({ exitCode: 0, stdout: "ok\n", stderr: "" });
+			let release: (value: unknown) => void = () => {};
+			sandboxMock.create.mockImplementation(
+				() =>
+					new Promise((resolve) => {
+						release = resolve;
+					}),
+			);
+			const h = makeHarness();
+			await sandboxE2bPlugin.setup(h.ctx);
+
+			const first = h.tools.get("bash")?.({ command: "echo one" }, toolCtx);
+			const second = h.tools.get("file_read")?.({ path: "/tmp/x" }, toolCtx);
+			// Let both calls reach the recovery path while creation is still pending.
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			release(sandbox);
+
+			expect(await first).toBe("ok\n");
+			expect(await second).toBe("file contents");
+			expect(sandboxMock.create).toHaveBeenCalledTimes(1);
+		});
+
+		it("a failed recovery is not cached: the next tool call retries and the error names the cause", async () => {
+			const sandbox = makeSandbox();
+			sandbox.commands.run.mockResolvedValue({ exitCode: 0, stdout: "ok\n", stderr: "" });
+			sandboxMock.create.mockRejectedValueOnce(new Error("E2B 503")).mockResolvedValueOnce(sandbox);
+			const h = makeHarness();
+			await sandboxE2bPlugin.setup(h.ctx);
+
+			await expect(h.tools.get("bash")?.({ command: "echo hi" }, toolCtx)).rejects.toThrow(
+				"Failed to create E2B sandbox: E2B 503",
+			);
+			expect(await h.tools.get("bash")?.({ command: "echo hi" }, toolCtx)).toBe("ok\n");
+			expect(sandboxMock.create).toHaveBeenCalledTimes(2);
+		});
+
+		it("a failed resume clears the stale pre-suspend handle so tools can self-heal later", async () => {
+			const preSuspend = makeSandbox();
+			sandboxMock.create.mockResolvedValueOnce(preSuspend);
+			const h = makeHarness({ apiKey: "test-key", persistence: true });
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+			// Resume fails entirely: reconnect and replacement creation both down.
+			sandboxMock.connect.mockRejectedValue(new Error("region outage"));
+			sandboxMock.create.mockRejectedValueOnce(new Error("quota exceeded"));
+			await expect(h.hooks.get(LifecycleEvent.SessionResume)?.()).rejects.toThrow(
+				"Failed to create E2B sandbox: quota exceeded",
+			);
+
+			// E2B recovers: the next tool call must not keep returning the stale
+			// pre-suspend handle — it re-runs the stored-id recovery instead.
+			const recovered = makeSandbox();
+			recovered.commands.run.mockResolvedValue({ exitCode: 0, stdout: "back\n", stderr: "" });
+			sandboxMock.connect.mockReset();
+			sandboxMock.connect.mockResolvedValue(recovered);
+			expect(await h.tools.get("bash")?.({ command: "ls" }, toolCtx)).toBe("back\n");
+			expect(sandboxMock.connect).toHaveBeenCalledWith("sbx_1", { apiKey: "test-key" });
+		});
+
+		it("session end during an in-flight recovery settles it before teardown resolves", async () => {
+			const sandbox = makeSandbox();
+			let release: (value: unknown) => void = () => {};
+			sandboxMock.create.mockImplementation(
+				() =>
+					new Promise((resolve) => {
+						release = resolve;
+					}),
+			);
+			sandboxMock.kill.mockResolvedValue(true);
+			const h = makeHarness();
+			await sandboxE2bPlugin.setup(h.ctx);
+
+			const call = h.tools.get("bash")?.({ command: "echo hi" }, toolCtx);
+			// Let the recovery reach the pending creation, then tear the session down.
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			const ending = h.hooks.get(LifecycleEvent.SessionEnd)?.();
+			// Teardown must wait for the pending recovery instead of racing it.
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			release(sandbox);
+			await ending;
+
+			// By the time teardown resolved, the late sandbox was already reaped,
+			// nothing was published, and no stored id survived.
+			expect(sandboxMock.kill).toHaveBeenCalledWith("sbx_1", { apiKey: "test-key" });
+			expect(h.store.has("e2b_sandbox_id")).toBe(false);
+			await expect(call).rejects.toThrow("torn down during recovery");
+			const capability = h.provided.get(PAREL_SANDBOX_CAPABILITY) as SandboxCapability;
+			expect(await capability.lifecycle?.isRunning()).toBe(false);
 		});
 	});
 });

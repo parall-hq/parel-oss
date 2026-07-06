@@ -193,25 +193,35 @@ export default definePlugin({
 		// hand the in-sandbox process its credentials/config at boot time.
 		const envs = (ctx.config.env as Record<string, string> | undefined) ?? {};
 		let sandbox: Sandbox | null = null;
+		let sandboxRecovery: Promise<Sandbox> | null = null;
+		// Bumped on teardown so an in-flight recovery can tell its result is
+		// stale and must not be published (or leak) after the session ended.
+		let sandboxEpoch = 0;
 
-		function requireSandbox(): Sandbox {
-			if (!sandbox) throw new Error("E2B sandbox not available");
-			return sandbox;
-		}
-
-		async function createSandbox(): Promise<Sandbox | null> {
+		async function createSandbox(): Promise<Sandbox> {
 			if (!apiKey) {
-				ctx.log.warn("E2B API key not provided — skipping sandbox creation");
-				return null;
+				// A missing key is a deployment/config error: fail loudly and early.
+				// Silently skipping creation here used to let the whole session run
+				// with every sandbox tool broken, surfacing only as a generic
+				// "not available" at tool-call time.
+				throw new Error(
+					'E2B API key not provided — set the "apiKey" secret for @parel/sandbox-e2b',
+				);
 			}
-			const s = await Sandbox.create(template, {
-				timeoutMs: timeout,
-				apiKey,
-				envs,
-				...(persistence
-					? { lifecycle: { onTimeout: { action: "pause" as const, keepMemory } } }
-					: {}),
-			});
+			let s: Sandbox;
+			try {
+				s = await Sandbox.create(template, {
+					timeoutMs: timeout,
+					apiKey,
+					envs,
+					...(persistence
+						? { lifecycle: { onTimeout: { action: "pause" as const, keepMemory } } }
+						: {}),
+				});
+			} catch (err: unknown) {
+				const msg = err instanceof Error ? err.message : "Unknown error";
+				throw new Error(`Failed to create E2B sandbox: ${msg}`, { cause: err });
+			}
 			await ctx.store.set(STORE_KEY, s.sandboxId);
 			ctx.log.info(
 				`E2B sandbox created: ${s.sandboxId}${persistence ? " (persistent: pause-on-timeout)" : ""}`,
@@ -220,32 +230,111 @@ export default definePlugin({
 		}
 
 		async function reconnectSandbox(sandboxId: string): Promise<Sandbox | null> {
+			// For a PAUSED sandbox (persistence mode) connect() transparently
+			// resumes it — with keepMemory=false that's a cold boot from the
+			// filesystem snapshot (a few seconds), with keepMemory=true a warm
+			// ~1s memory restore. Giving up swaps in a blank filesystem (see
+			// acquireSandbox), so retry once: a transient network blip must not
+			// cost the user their files.
+			for (let attempt = 1; attempt <= 2; attempt++) {
+				try {
+					const s = await Sandbox.connect(sandboxId, { apiKey });
+					ctx.log.info(`Reconnected to E2B sandbox: ${sandboxId}`);
+					return s;
+				} catch (err: unknown) {
+					const msg = err instanceof Error ? err.message : "Unknown error";
+					ctx.log.warn(
+						`Failed to reconnect to sandbox ${sandboxId} (attempt ${attempt}/2): ${msg}`,
+					);
+				}
+			}
+			return null;
+		}
+
+		async function killSandboxById(sandboxId: string): Promise<boolean> {
 			try {
-				// For a PAUSED sandbox (persistence mode) connect() transparently
-				// resumes it — with keepMemory=false that's a cold boot from the
-				// filesystem snapshot (a few seconds), with keepMemory=true a warm
-				// ~1s memory restore. A failed connect (expired/killed/corrupted
-				// snapshot) falls through to createSandbox() in the caller.
-				const s = await Sandbox.connect(sandboxId, { apiKey });
-				ctx.log.info(`Reconnected to E2B sandbox: ${sandboxId}`);
-				return s;
+				await Sandbox.kill(sandboxId, { apiKey });
+				return true;
 			} catch (err: unknown) {
 				const msg = err instanceof Error ? err.message : "Unknown error";
-				ctx.log.warn(`Failed to reconnect to sandbox ${sandboxId}: ${msg}`);
-				return null;
+				ctx.log.warn(`Failed to kill E2B sandbox ${sandboxId}: ${msg}`);
+				return false;
 			}
 		}
 
-		async function destroySandbox(): Promise<void> {
-			if (!sandbox) return;
-			try {
-				await sandbox.kill();
-				ctx.log.info(`E2B sandbox destroyed: ${sandbox.sandboxId}`);
-			} catch (err: unknown) {
-				const msg = err instanceof Error ? err.message : "Unknown error";
-				ctx.log.warn(`Failed to destroy sandbox: ${msg}`);
+		// Reconnect to the stored sandbox if there is one, else create fresh.
+		// Shared by the SessionResume warm path and the ensureSandbox fallback.
+		async function acquireSandbox(): Promise<Sandbox> {
+			const savedId = await ctx.store.get<string>(STORE_KEY);
+			if (savedId) {
+				const reconnected = await reconnectSandbox(savedId);
+				if (reconnected) return reconnected;
+				// The stored sandbox is unreachable — swap in a fresh one. Order
+				// matters: create the replacement FIRST. If creation fails (quota,
+				// outage) the store still points at the old snapshot, so a later
+				// attempt can reconnect once E2B recovers instead of having killed
+				// the user's files with nothing to replace them. Only once the
+				// replacement exists is the old sandbox reaped (best-effort) so its
+				// paused snapshot doesn't leak storage: after STORE_KEY is
+				// overwritten nothing else would ever kill it.
+				const fresh = await createSandbox();
+				ctx.log.warn(
+					`E2B filesystem reset: sandbox ${savedId} was unreachable, swapped in ${fresh.sandboxId} (files in the previous sandbox are lost)`,
+				);
+				await killSandboxById(savedId);
+				return fresh;
 			}
+			return createSandbox();
+		}
+
+		// Tool/capability call path. Lifecycle hooks stay the warm path; this is
+		// the fallback for when they were skipped or misfired, so the first tool
+		// call self-heals instead of the whole turn failing on a dead sandbox.
+		// Single-flight: concurrent tool calls await one shared recovery instead
+		// of racing N sandbox creations. A failed recovery clears the slot so the
+		// next call retries rather than caching the failure.
+		async function ensureSandbox(): Promise<Sandbox> {
+			if (sandbox) return sandbox;
+			if (!sandboxRecovery) {
+				const epoch = sandboxEpoch;
+				sandboxRecovery = acquireSandbox()
+					.then(async (s) => {
+						if (epoch !== sandboxEpoch) {
+							// The session tore down while this recovery was in flight.
+							// Publishing now would resurrect a sandbox nothing will ever
+							// clean up — reap it and stay torn down instead.
+							await killSandboxById(s.sandboxId);
+							await ctx.store.delete(STORE_KEY);
+							throw new Error("E2B sandbox was torn down during recovery");
+						}
+						sandbox = s;
+						return s;
+					})
+					.finally(() => {
+						sandboxRecovery = null;
+					});
+			}
+			return sandboxRecovery;
+		}
+
+		async function destroySandbox(): Promise<void> {
+			sandboxEpoch++;
+			// Settle any in-flight recovery before finishing: after the epoch bump
+			// it reaps itself instead of publishing, and awaiting it here means
+			// teardown is actually complete when this resolves — no orphan
+			// continuation left behind to leak a late sandbox (host may dispose
+			// the runtime) or delete a successor session's stored id.
+			if (sandboxRecovery) {
+				await sandboxRecovery.catch(() => {});
+			}
+			// Resolve the target from the live handle or the stored id — a session
+			// can end while only the store knows the sandbox (hooks misfired), and
+			// a paused snapshot would otherwise be retained (and billed) forever.
+			const sandboxId = sandbox?.sandboxId ?? (await ctx.store.get<string>(STORE_KEY));
 			sandbox = null;
+			if (sandboxId && (await killSandboxById(sandboxId))) {
+				ctx.log.info(`E2B sandbox destroyed: ${sandboxId}`);
+			}
 			await ctx.store.delete(STORE_KEY);
 		}
 
@@ -267,34 +356,40 @@ export default definePlugin({
 		});
 
 		ctx.hook(LifecycleEvent.SessionResume, async () => {
-			const savedId = await ctx.store.get<string>(STORE_KEY);
-			if (savedId) {
-				sandbox = await reconnectSandbox(savedId);
-			}
-			if (!sandbox) {
-				sandbox = await createSandbox();
-			}
+			// Reconnect unconditionally: a stale in-memory handle may point at a
+			// sandbox that has since paused, and connect() is what resumes it.
+			// Clear the handle first — if the resume fails entirely, a lingering
+			// stale handle would satisfy ensureSandbox forever and block the
+			// self-healing retry; null lets the next tool call recover.
+			sandbox = null;
+			sandbox = await acquireSandbox();
 		});
 
 		// --- Capabilities ---
 
 		const filesystem = {
 			async readFile(path: string): Promise<string> {
-				return requireSandbox().files.read(path);
+				const s = await ensureSandbox();
+				return s.files.read(path);
 			},
 			async writeFile(path: string, content: string): Promise<void> {
-				await requireSandbox().files.write(path, content);
+				const s = await ensureSandbox();
+				await s.files.write(path, content);
 			},
 			async exists(path: string): Promise<boolean> {
+				// ensureSandbox stays outside the try: an unavailable sandbox is an
+				// error worth surfacing, only a failed read means "does not exist".
+				const s = await ensureSandbox();
 				try {
-					await requireSandbox().files.read(path);
+					await s.files.read(path);
 					return true;
 				} catch {
 					return false;
 				}
 			},
 			async listDir(path: string): Promise<string[]> {
-				const entries = await requireSandbox().files.list(path);
+				const s = await ensureSandbox();
+				const entries = await s.files.list(path);
 				return entries.map((e: { name: string }) => e.name);
 			},
 		};
@@ -308,15 +403,14 @@ export default definePlugin({
 		// follow-up (P1). Design: docs/invocation-context.md §6.
 		const exec = {
 			async run(command: string, invocation?: InvocationContext): Promise<string> {
+				const s = await ensureSandbox();
 				const turnEnv = invocationEnv(invocation);
 				// E2B per-command `envs` shadow the sandbox's cold-start envs, so merge the
 				// configured sandbox env (`config.env`) underneath the per-turn values — the
 				// per-turn invocation context wins on key conflicts.
 				const commandEnv = turnEnv ? { ...envs, ...turnEnv } : undefined;
 				const result = await runToResult(
-					commandEnv
-						? requireSandbox().commands.run(command, { envs: commandEnv })
-						: requireSandbox().commands.run(command),
+					commandEnv ? s.commands.run(command, { envs: commandEnv }) : s.commands.run(command),
 				);
 				if (result.exitCode !== 0 && result.stderr) {
 					return `Exit code: ${result.exitCode}\n${result.stderr}`;
@@ -329,8 +423,8 @@ export default definePlugin({
 			command: string,
 			opts?: SandboxExecOptions | SandboxShellOptions,
 		): Promise<SandboxProcessResult> {
-			if (!sandbox) throw new Error("E2B sandbox not available");
-			const result = await runToResult(sandbox.commands.run(applyShellOptions(command, opts)));
+			const s = await ensureSandbox();
+			const result = await runToResult(s.commands.run(applyShellOptions(command, opts)));
 			return {
 				stdout: limitOutput(result.stdout, opts?.maxOutputChars),
 				stderr: limitOutput(result.stderr, opts?.maxOutputChars),
@@ -354,22 +448,22 @@ export default definePlugin({
 			},
 			fs: {
 				async readFile(path, opts) {
-					if (!sandbox) throw new Error("E2B sandbox not available");
-					const content = await sandbox.files.read(path);
+					const s = await ensureSandbox();
+					const content = await s.files.read(path);
 					if (opts?.maxChars && content.length > opts.maxChars)
 						return content.slice(0, opts.maxChars);
 					return content;
 				},
 				async writeFile(path, content) {
-					if (!sandbox) throw new Error("E2B sandbox not available");
-					await sandbox.files.write(path, content);
+					const s = await ensureSandbox();
+					await s.files.write(path, content);
 				},
 				async exists(path) {
 					return filesystem.exists(path);
 				},
 				async listDir(path) {
-					if (!sandbox) throw new Error("E2B sandbox not available");
-					const entries = await sandbox.files.list(path);
+					const s = await ensureSandbox();
+					const entries = await s.files.list(path);
 					return entries.map((entry: { name: string; path?: string }) => ({
 						name: entry.name,
 						path: entry.path,
@@ -387,6 +481,8 @@ export default definePlugin({
 			},
 			lifecycle: {
 				async isRunning() {
+					// A pure status query: reports the current state and must not
+					// side-effect a sandbox into existence like ensureSandbox would.
 					return sandbox !== null;
 				},
 				async stop() {
@@ -398,7 +494,7 @@ export default definePlugin({
 		const processes: SandboxProcessCapability = {
 			async start(command, opts = {}) {
 				if (!command.trim()) throw new Error("command must be a non-empty string");
-				const s = requireSandbox();
+				const s = await ensureSandbox();
 				const id = createId("proc");
 				const dir = processLogDir(id);
 				const stdoutPath = `${dir}/stdout.log`;
@@ -427,7 +523,7 @@ export default definePlugin({
 				return record;
 			},
 			async list() {
-				const s = requireSandbox();
+				const s = await ensureSandbox();
 				const keys = await ctx.store.list(PROCESS_STORE_PREFIX);
 				const records = (
 					await Promise.all(keys.map((key) => ctx.store.get<SandboxProcessHandle>(key)))
@@ -444,7 +540,7 @@ export default definePlugin({
 				}));
 			},
 			async tail(processId, opts = {}) {
-				const s = requireSandbox();
+				const s = await ensureSandbox();
 				const record = await ctx.store.get<SandboxProcessHandle>(
 					storeKey(PROCESS_STORE_PREFIX, processId),
 				);
@@ -464,7 +560,7 @@ export default definePlugin({
 				};
 			},
 			async stop(processId) {
-				const s = requireSandbox();
+				const s = await ensureSandbox();
 				const record = await ctx.store.get<SandboxProcessHandle>(
 					storeKey(PROCESS_STORE_PREFIX, processId),
 				);
@@ -483,7 +579,8 @@ export default definePlugin({
 					throw new Error("port must be between 1 and 65535");
 				}
 				const protocol = opts.protocol ?? "https";
-				const host = requireSandbox().getHost(normalizedPort);
+				const s = await ensureSandbox();
+				const host = s.getHost(normalizedPort);
 				const handle: SandboxPortHandle = {
 					id: String(normalizedPort),
 					port: normalizedPort,
