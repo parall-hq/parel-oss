@@ -112,6 +112,23 @@ Hooks may continue, skip, block, suspend, or stop. Blocking and stopping must in
 
 Hooks that support mutations return `action: "continue"` plus a `mutations` object.
 
+### Gating vs. broadcast events
+
+Only `model:before`, `tool:before`, and `step:end` are **gating** events: a
+non-continue action takes effect (the model call, tool call, or turn
+continuation is blocked/suspended/stopped) and short-circuits the remaining
+hooks for that event.
+
+Every other event is a **broadcast**: the runtime delivers it to every
+registered hook regardless of what earlier hooks return or throw. A
+non-continue action on a broadcast event is ignored (mutations still apply),
+and a hook error does not prevent later hooks from running — errors are
+collected and surfaced after the full pass. Plugins must not rely on a
+broadcast-event action to gate execution, and must tolerate their lifecycle
+hooks running even when a sibling plugin's hook failed: events like
+`session:resume` exist so each plugin can restore its own state, and one
+plugin must not be able to silently disable the others.
+
 ## Static Metadata
 
 `requires.secrets` declares which plugin config fields are secrets — their
