@@ -770,6 +770,49 @@ describe("@parel/sandbox-e2b", () => {
 			expect(sandboxMock.kill).not.toHaveBeenCalled();
 		});
 
+		it("migrates legacy process/port records along with a promoted sandbox", async () => {
+			const istore = makeInstanceStore();
+			const legacy = makeSandbox();
+			legacy.sandboxId = "sbx_legacy";
+			sandboxMock.connect.mockResolvedValue(legacy);
+
+			const h = makeHarness({ apiKey: "test-key" }, istore);
+			h.store.set("e2b_sandbox_id", "sbx_legacy");
+			h.store.set("e2b_process:p1", { id: "p1", pid: 9, status: "running" });
+			h.store.set("e2b_port:3000", { id: "3000", port: 3000 });
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+			// The sandbox's running processes/ports must stay visible after the
+			// upgrade — their records follow the sandbox into the instance store.
+			expect(await istore.list("e2b_process:")).toEqual(["e2b_process:p1"]);
+			expect(await istore.list("e2b_port:")).toEqual(["e2b_port:3000"]);
+			expect(h.store.size).toBe(0);
+		});
+
+		it("drops ghost process/port records when the legacy sandbox is reaped", async () => {
+			const istore = makeInstanceStore();
+			await istore.set("e2b_sandbox_id", "sbx_shared");
+			const shared = makeSandbox();
+			shared.sandboxId = "sbx_shared";
+			const legacy = makeSandbox();
+			legacy.sandboxId = "sbx_legacy";
+			sandboxMock.connect.mockImplementation(async (id: string) =>
+				id === "sbx_shared" ? shared : legacy,
+			);
+
+			const h = makeHarness({ apiKey: "test-key" }, istore);
+			h.store.set("e2b_sandbox_id", "sbx_legacy");
+			h.store.set("e2b_process:p1", { id: "p1", pid: 9, status: "running" });
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+			// The legacy sandbox was killed — its process records are ghosts and
+			// must not pollute the shared instance's tables.
+			expect(await istore.list("e2b_process:")).toEqual([]);
+			expect(h.store.size).toBe(0);
+		});
+
 		it("reaps its legacy sandbox when a sibling's is already authoritative", async () => {
 			const istore = makeInstanceStore();
 			await istore.set("e2b_sandbox_id", "sbx_shared");

@@ -295,6 +295,23 @@ export default definePlugin({
 			}
 		}
 
+		// Process/port records belong to their sandbox. When the legacy sandbox
+		// is promoted they must follow it into the instance store (its background
+		// processes are still running — dropping the records would blind
+		// list/tail/stop/revoke); when it is reaped or dead they are ghosts and
+		// must be deleted instead.
+		async function moveLegacyRecords(promote: boolean): Promise<void> {
+			for (const prefix of [PROCESS_STORE_PREFIX, PORT_STORE_PREFIX]) {
+				for (const key of await ctx.store.list(prefix)) {
+					if (promote) {
+						const record = await ctx.store.get(key);
+						if (record !== null) await state.set(key, record);
+					}
+					await ctx.store.delete(key);
+				}
+			}
+		}
+
 		// One-time migration sweep for a pre-instance-mode session: a legacy
 		// per-session handle either becomes the instance's authoritative sandbox
 		// (files survive the upgrade), or — when a sibling's sandbox already
@@ -311,10 +328,12 @@ export default definePlugin({
 				if (!reconnected) {
 					// Dead handle — nothing to promote or reap.
 					await ctx.store.delete(STORE_KEY);
+					await moveLegacyRecords(false);
 					return;
 				}
 				if (await istore.cas(STORE_KEY, null, legacy)) {
 					await ctx.store.delete(STORE_KEY);
+					await moveLegacyRecords(true);
 					ctx.log.info(`E2B sandbox ${legacy} migrated to the instance store`);
 					return;
 				}
@@ -325,6 +344,7 @@ export default definePlugin({
 				ctx.log.info(`E2B legacy sandbox ${legacy} reaped (instance already has a sandbox)`);
 			}
 			await ctx.store.delete(STORE_KEY);
+			await moveLegacyRecords(false);
 		}
 
 		// Instance mode: acquire the ONE sandbox shared by every session of this
