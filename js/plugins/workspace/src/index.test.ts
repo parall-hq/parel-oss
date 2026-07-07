@@ -32,10 +32,45 @@ function makeStore(values = new Map<string, unknown>()): SessionStore {
 	};
 }
 
+// In-memory InstanceStore with real cas() semantics; share one between two
+// harnesses to simulate sibling sessions of the same agent instance.
+function makeInstanceStore() {
+	const rows = new Map<string, { value: unknown; version: number }>();
+	return {
+		rows,
+		async get<T>(key: string) {
+			const row = rows.get(key);
+			return row ? { value: row.value as T, version: row.version } : null;
+		},
+		async set<T>(key: string, value: T) {
+			rows.set(key, { value, version: (rows.get(key)?.version ?? 0) + 1 });
+		},
+		async delete(key: string) {
+			rows.delete(key);
+		},
+		async list(prefix = "") {
+			return [...rows.keys()].filter((key) => key.startsWith(prefix));
+		},
+		async cas<T>(key: string, expectedVersion: number | null, value: T) {
+			const current = rows.get(key)?.version ?? null;
+			if (current !== expectedVersion) return false;
+			rows.set(key, { value, version: (current ?? 0) + 1 });
+			return true;
+		},
+		async casDelete(key: string, expectedVersion: number) {
+			const current = rows.get(key)?.version ?? null;
+			if (current !== expectedVersion) return false;
+			rows.delete(key);
+			return true;
+		},
+	};
+}
+
 function makeHarness(opts: {
 	config?: Record<string, unknown>;
 	storeValues?: Map<string, unknown>;
 	exec?: ExecCapability;
+	instanceStore?: ReturnType<typeof makeInstanceStore>;
 }): Harness {
 	const provided = new Map<string, unknown>();
 	const tools = new Map<string, { def: ToolDefinition; handler: ToolHandler }>();
@@ -44,6 +79,8 @@ function makeHarness(opts: {
 	const ctx = {
 		config: opts.config ?? {},
 		store: makeStore(storeValues),
+		instanceStore: opts.instanceStore,
+		instance: opts.instanceStore ? { key: "main", ephemeral: false } : undefined,
 		inputs: {} as PluginContext["inputs"],
 		model: {} as PluginContext["model"],
 		log: { debug() {}, info() {}, warn() {}, error() {} },
@@ -241,5 +278,86 @@ describe("@parel/workspace", () => {
 				},
 			],
 		});
+	});
+});
+
+describe("instance mode (ctx.instanceStore present)", () => {
+	const gitConfig = {
+		identity: { type: "git", repo: "https://github.com/acme/app.git" },
+		workspaceId: "ws_shared",
+	};
+
+	function capability(h: Harness): WorkspaceCapability {
+		return h.provided.get(WORKSPACE_CAPABILITY) as WorkspaceCapability;
+	}
+
+	it("a sibling session sees the root materialized by another", async () => {
+		const istore = makeInstanceStore();
+		const exec: ExecCapability = {
+			run: vi.fn(
+				async (cmd: string) => `__PAREL_WORKSPACE_OK__:${rootFromMaterializeCommand(cmd)}`,
+			),
+		};
+		const hA = makeHarness({ config: gitConfig, exec, instanceStore: istore });
+		const hB = makeHarness({ config: gitConfig, exec, instanceStore: istore });
+		await workspacePlugin.setup(hA.ctx);
+		await workspacePlugin.setup(hB.ctx);
+
+		await capability(hA).materialize();
+		// B reads the authoritative handle: root present, no second clone needed.
+		const handle = await capability(hB).current();
+		expect(handle?.root).toMatch(/^\/workspace\/app-/);
+		const result = await capability(hB).materialize();
+		expect(result.root).toMatch(/^\/workspace\/app-/);
+		expect(exec.run).toHaveBeenCalledTimes(1); // only A's clone ran
+	});
+
+	it("losing the save race adopts the sibling's handle", async () => {
+		const istore = makeInstanceStore();
+		const exec: ExecCapability = {
+			run: vi.fn(
+				async (cmd: string) => `__PAREL_WORKSPACE_OK__:${rootFromMaterializeCommand(cmd)}`,
+			),
+		};
+		const hA = makeHarness({ config: gitConfig, exec, instanceStore: istore });
+		const hB = makeHarness({ config: gitConfig, exec, instanceStore: istore });
+		await workspacePlugin.setup(hA.ctx);
+		await workspacePlugin.setup(hB.ctx);
+
+		// Both read (version=null), then A saves first — B's save must adopt.
+		const a = capability(hA);
+		const b = capability(hB);
+		await a.current();
+		await b.current();
+		// A materializes (saves root); B then materializes concurrently-ish.
+		await a.materialize();
+		const result = await b.materialize();
+		expect(result.root).toMatch(/^\/workspace\/app-/);
+		const entry = await istore.get<WorkspaceHandle>("current");
+		expect((entry?.value as WorkspaceHandle).root).toMatch(/^\/workspace\/app-/);
+	});
+
+	it("migrates a legacy per-session handle into the instance store", async () => {
+		const istore = makeInstanceStore();
+		const storeValues = new Map<string, unknown>([
+			[
+				"current",
+				{
+					id: "ws_legacy",
+					identity: { type: "git", repo: "https://github.com/acme/app.git" },
+					metadata: { root: "/tmp/parel/workspaces/ws_legacy" },
+					root: "/tmp/parel/workspaces/ws_legacy",
+				},
+			],
+		]);
+		const h = makeHarness({ config: gitConfig, storeValues, instanceStore: istore });
+		await workspacePlugin.setup(h.ctx);
+
+		const handle = await capability(h).current();
+		expect(handle?.id).toBe("ws_legacy");
+		expect(handle?.root).toBe("/tmp/parel/workspaces/ws_legacy");
+		// Promoted to the instance store; session-store copy cleaned up.
+		expect(await istore.get("current")).not.toBeNull();
+		expect(storeValues.has("current")).toBe(false);
 	});
 });

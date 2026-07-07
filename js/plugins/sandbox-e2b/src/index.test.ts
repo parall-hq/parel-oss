@@ -989,6 +989,28 @@ describe("@parel/sandbox-e2b", () => {
 			expect(sandboxMock.kill).toHaveBeenCalledWith("sbx_eph", { apiKey: "test-key" });
 		});
 
+		it("clears ghost process/port records when the instance sandbox is destroyed", async () => {
+			const istore = makeInstanceStore();
+			await istore.set("e2b_sandbox_id", "sbx_shared");
+			await istore.set("e2b_process:p1", { id: "p1", pid: 9, status: "running" });
+			await istore.set("e2b_port:3000", { id: "3000", port: 3000 });
+			const shared = makeSandbox();
+			shared.sandboxId = "sbx_shared";
+			sandboxMock.connect.mockResolvedValue(shared);
+			sandboxMock.kill.mockResolvedValue(true);
+
+			const h = makeHarness({ apiKey: "test-key" }, istore);
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+			const capability = h.provided.get(PAREL_SANDBOX_CAPABILITY) as SandboxCapability;
+			await capability.lifecycle?.stop();
+
+			// The killed sandbox's processes/ports are ghosts — a sibling's
+			// list/tail against them would target a dead machine.
+			expect(await istore.list("e2b_process:")).toEqual([]);
+			expect(await istore.list("e2b_port:")).toEqual([]);
+		});
+
 		it("stores process records in the instance store so siblings see them", async () => {
 			const istore = makeInstanceStore();
 			const sandbox = makeSandbox();

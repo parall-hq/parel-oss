@@ -243,16 +243,56 @@ export default definePlugin({
 	async setup(ctx) {
 		const config = (ctx.config ?? {}) as WorkspaceConfig;
 
+		// Instance mode (docs/agent-instance-model.md §4.3): the workspace handle
+		// describes state inside the instance's SHARED sandbox (materialized root,
+		// branch), so it must live at the same layer as the sandbox itself. Every
+		// session of the instance reads the authoritative handle per call (no
+		// local cache — a sibling may materialize between our turns) and saves
+		// via cas: losing means a sibling saved first, and since siblings run the
+		// same config their handle is the one to adopt. Filesystem-level races
+		// (two concurrent clones) are left to the idempotent materialize script —
+		// the loser's next attempt lands on the fetch path.
+		const istore = ctx.instanceStore;
+		// Per-session mode only.
 		let cached: WorkspaceHandle | null | undefined;
+		// cas token: version observed by the latest instance-store read.
+		let lastSeenVersion: number | null = null;
 
 		const save = async (handle: WorkspaceHandle): Promise<WorkspaceHandle> => {
 			const normalized = normalizeHandle(handle) ?? handle;
+			if (istore) {
+				if (await istore.cas(STORE_KEY, lastSeenVersion, normalized)) {
+					const entry = await istore.get<WorkspaceHandle>(STORE_KEY);
+					lastSeenVersion = entry?.version ?? null;
+					return normalized;
+				}
+				// A sibling saved first — adopt the authoritative handle.
+				const entry = await istore.get<WorkspaceHandle>(STORE_KEY);
+				lastSeenVersion = entry?.version ?? null;
+				return normalizeHandle(entry?.value) ?? normalized;
+			}
 			await ctx.store.set(STORE_KEY, normalized);
 			cached = normalized;
 			return normalized;
 		};
 
 		const current = async (): Promise<WorkspaceHandle | null> => {
+			if (istore) {
+				const entry = await istore.get<WorkspaceHandle>(STORE_KEY);
+				lastSeenVersion = entry?.version ?? null;
+				const stored = normalizeHandle(entry?.value);
+				if (stored) return stored;
+				// One-time migration: promote a pre-instance-mode per-session
+				// handle so an already-materialized root survives the upgrade.
+				const legacy = normalizeHandle(await ctx.store.get(STORE_KEY));
+				if (legacy) {
+					const adopted = await save(legacy);
+					await ctx.store.delete(STORE_KEY);
+					return adopted;
+				}
+				const configured = configuredHandle(config);
+				return configured ? await save(configured) : null;
+			}
 			if (cached !== undefined) return cached;
 			const stored = normalizeHandle(await ctx.store.get(STORE_KEY));
 			if (stored) {

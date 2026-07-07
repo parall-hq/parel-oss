@@ -1,0 +1,7 @@
+---
+"@parel/sandbox-vercel": minor
+"@parel/sandbox-modal": minor
+"@parel/sandbox-daytona": minor
+---
+
+sandbox-vercel/modal/daytona: instance mode — on hosts providing `ctx.instanceStore`, the sandbox belongs to the agent instance instead of a single session, matching `@parel/sandbox-e2b`. Every session of the instance shares one sandbox (authoritative handle in the instance store, all mutations via `cas()` so racing sessions converge on one machine and losers reap their orphans), a conversation ending releases the local handle without killing the shared sandbox (an ephemeral instance still destroys it), and process/port records move to the instance store so sibling sessions see them. Pre-migration per-session sandboxes are migrated on first acquire: promoted to authoritative when the instance has none, reaped as orphans when a sibling's sandbox already holds authority. Capability calls now re-check the authoritative handle so a sibling's swap can't strand a session on a dead machine, and `lifecycle.stop()` destroys the shared sandbox through a versioned `casDelete` retire. An explicitly configured sandbox identity is treated as externally managed and connected directly, without racing/killing/migrating: `sandboxId` for daytona, `sandboxId` or `name` for modal (both documented reconnect paths), and `name` for vercel (whose handle *is* the name). Hosts without instance storage keep the exact per-session behavior, including `lifecycle.stop()` (which pauses/stops the sandbox per provider rather than deleting it).
