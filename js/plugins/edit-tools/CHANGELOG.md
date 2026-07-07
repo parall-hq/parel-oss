@@ -1,5 +1,13 @@
 # @parel/edit-tools
 
+## 0.1.11
+
+### Patch Changes
+
+- Updated dependencies [25352cf]
+  - @parel/plugin-sdk@0.10.1
+  - @parel/workspace@0.1.11
+
 ## 0.1.10
 
 ### Patch Changes

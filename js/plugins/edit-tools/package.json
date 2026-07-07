@@ -1,6 +1,6 @@
 {
   "name": "@parel/edit-tools",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "Workspace exact-edit tools for PAREL coding agents.",
   "license": "MIT",
   "repository": {
