@@ -1,6 +1,8 @@
 import type { HookHandler, HookOptions, LifecycleEventType } from "./lifecycle.js";
 import type {
 	InputQueue,
+	InstanceInfo,
+	InstanceStore,
 	ModelCallParams,
 	ModelCapabilities,
 	ModelStreamChunk,
@@ -37,6 +39,16 @@ export interface ModelGatewayAccess {
 export interface PluginContext {
 	config: Record<string, unknown>;
 	store: SessionStore;
+	/**
+	 * Instance-scoped bucket shared across every session of the same agent
+	 * instance (sandbox handles, long-term memory). `undefined` on hosts
+	 * without instance storage — probe explicitly and degrade honestly; the
+	 * host never silently substitutes the per-session store. Hook/tool
+	 * handlers reach it by closure capture from setup.
+	 */
+	instanceStore?: InstanceStore;
+	/** Identity of the owning instance; `undefined` on hosts that predate it. */
+	instance?: InstanceInfo;
 	inputs: InputQueue;
 	log: PluginLogger;
 	model: ModelGatewayAccess;

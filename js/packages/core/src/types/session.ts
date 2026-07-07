@@ -37,6 +37,43 @@ export interface SessionStore {
 	list(prefix?: string): Promise<string[]>;
 }
 
+/** A versioned entry in the instance-scoped store; `version` is the CAS token. */
+export interface InstanceStoreEntry<T = unknown> {
+	value: T;
+	/** Monotonic per-key version, input to {@link InstanceStore.cas}. */
+	version: number;
+}
+
+/**
+ * Instance-scoped plugin state: shared by every session of the same agent
+ * instance, surviving conversation resets. Unlike the per-session
+ * {@link SessionStore} it is multi-writer — concurrent turns of sibling
+ * sessions may write the same key — so prefer `cas()` for read-modify-write
+ * (e.g. racing to create one shared sandbox: `cas(key, null, handle)`, and the
+ * loser re-reads the winner's value). Namespaced per plugin by the host.
+ */
+export interface InstanceStore {
+	get<T = unknown>(key: string): Promise<InstanceStoreEntry<T> | null>;
+	/** Unconditional write (last-write-wins). */
+	set<T = unknown>(key: string, value: T): Promise<void>;
+	delete(key: string): Promise<void>;
+	list(prefix?: string): Promise<string[]>;
+	/**
+	 * Compare-and-swap: writes only if the key's current version matches
+	 * `expectedVersion` (`null` = key must not exist yet). Returns whether the
+	 * write won.
+	 */
+	cas<T = unknown>(key: string, expectedVersion: number | null, value: T): Promise<boolean>;
+}
+
+/** Identity of the agent instance a session belongs to. */
+export interface InstanceInfo {
+	/** Instance key within the agent (e.g. "main", "customer-a"); null when ephemeral. */
+	key: string | null;
+	/** True for try-run / replay-fresh instances that die with the session. */
+	ephemeral: boolean;
+}
+
 export type MessageRole = "system" | "user" | "assistant" | "tool";
 export type MessageStatus = "streaming" | "completed" | "error";
 export type MessagePartVisibility = "chat" | "trace" | "hidden";
