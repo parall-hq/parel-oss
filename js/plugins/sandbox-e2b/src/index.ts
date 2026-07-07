@@ -379,6 +379,8 @@ export default definePlugin({
 							`E2B filesystem reset: sandbox ${entry.value} was unreachable, swapped in ${fresh.sandboxId} (files in the previous sandbox are lost)`,
 						);
 						await killSandboxById(entry.value);
+						// The replaced sandbox's processes/ports died with it.
+						await clearRecordsFor("sandbox replaced");
 						return fresh;
 					}
 					// A sibling already swapped in its replacement — discard ours.
@@ -478,6 +480,20 @@ export default definePlugin({
 			return sandboxRecovery;
 		}
 
+		// Process/port records describe state inside a specific sandbox. When that
+		// sandbox is killed or replaced, the records are ghosts — a sibling's
+		// list/tail/stop against them would target the wrong machine.
+		async function clearRecordsFor(reason: string): Promise<void> {
+			let cleared = 0;
+			for (const prefix of [PROCESS_STORE_PREFIX, PORT_STORE_PREFIX]) {
+				for (const key of await state.list(prefix)) {
+					await state.delete(key);
+					cleared++;
+				}
+			}
+			if (cleared > 0) ctx.log.info(`E2B cleared ${cleared} process/port records (${reason})`);
+		}
+
 		// Drop this session's reference to the shared sandbox WITHOUT killing it:
 		// in instance mode the sandbox belongs to the agent instance, and sibling
 		// sessions (or the next conversation) keep using it. E2B's own idle
@@ -527,6 +543,8 @@ export default definePlugin({
 					if (await killSandboxById(entry.value)) {
 						ctx.log.info(`E2B sandbox destroyed: ${entry.value}`);
 					}
+					// The killed sandbox's processes/ports are ghosts now.
+					await clearRecordsFor("sandbox destroyed");
 				}
 				await ctx.store.delete(STORE_KEY);
 				return;
