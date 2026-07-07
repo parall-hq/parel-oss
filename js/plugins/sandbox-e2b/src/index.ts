@@ -340,7 +340,16 @@ export default definePlugin({
 				const entry = await istore.get<string>(STORE_KEY);
 				if (entry) {
 					const reconnected = await reconnectSandbox(entry.value);
-					if (reconnected) return reconnected;
+					if (reconnected) {
+						// A sibling may have swapped the handle while we were
+						// reconnecting — the superseded sandbox can still answer
+						// connect() before the sibling's kill lands. Only adopt the
+						// handle if it is still authoritative; otherwise retry
+						// against the current one.
+						const current = await istore.get<string>(STORE_KEY);
+						if (current?.value === entry.value) return reconnected;
+						continue;
+					}
 					// Authoritative sandbox unreachable — replace it, guarded by the
 					// observed version so only one sibling wins the swap. Create the
 					// replacement FIRST (see the per-session path for why).
@@ -403,16 +412,21 @@ export default definePlugin({
 		// of racing N sandbox creations. A failed recovery clears the slot so the
 		// next call retries rather than caching the failure.
 		async function ensureSandbox(): Promise<Sandbox> {
-			if (sandbox) {
-				if (!istore) return sandbox;
+			// Capture the cached handle BEFORE any await: two concurrent tool
+			// calls can enter this block together, and the first to notice a
+			// stale handle nulls the shared `sandbox` — the second must compare
+			// against its own captured reference, not re-read the mutated slot.
+			const cached = sandbox;
+			if (cached) {
+				if (!istore) return cached;
 				// Instance mode: a sibling session may have replaced the shared
 				// sandbox (unreachable → swap). A cached local handle would keep
 				// this session on the dead machine forever, silently splitting the
 				// instance's "one shared filesystem". One instance-store read per
 				// tool call is cheap next to the sandbox operation itself.
 				const authoritative = await istore.get<string>(STORE_KEY);
-				if (authoritative?.value === sandbox.sandboxId) return sandbox;
-				sandbox = null; // stale — fall through and re-acquire
+				if (authoritative?.value === cached.sandboxId) return cached;
+				if (sandbox === cached) sandbox = null; // stale — re-acquire below
 			}
 			if (!sandboxRecovery) {
 				const epoch = sandboxEpoch;

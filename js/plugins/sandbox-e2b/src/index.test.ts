@@ -852,6 +852,59 @@ describe("@parel/sandbox-e2b", () => {
 			expect(sandboxMock.connect).toHaveBeenCalledWith("sbx_new", { apiKey: "test-key" });
 		});
 
+		it("concurrent tool calls survive a sibling's replacement without TypeError", async () => {
+			const istore = makeInstanceStore();
+			await istore.set("e2b_sandbox_id", "sbx_old");
+			const oldSb = makeSandbox();
+			oldSb.sandboxId = "sbx_old";
+			const newSb = makeSandbox();
+			newSb.sandboxId = "sbx_new";
+			newSb.files.read.mockResolvedValue("from new sandbox");
+			sandboxMock.connect.mockImplementation(async (id: string) =>
+				id === "sbx_old" ? oldSb : newSb,
+			);
+
+			const h = makeHarness({ apiKey: "test-key" }, istore);
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.(); // caches sbx_old
+			await istore.set("e2b_sandbox_id", "sbx_new"); // sibling swaps
+
+			// Both calls enter the staleness check together; the first nulls the
+			// shared slot — the second must not crash on it (captured local).
+			const [a, b] = await Promise.all([
+				h.tools.get("file_read")?.({ path: "/a" }, toolCtx),
+				h.tools.get("file_read")?.({ path: "/b" }, toolCtx),
+			]);
+			expect(a).toBe("from new sandbox");
+			expect(b).toBe("from new sandbox");
+		});
+
+		it("does not adopt a sandbox superseded during the reconnect window", async () => {
+			const istore = makeInstanceStore();
+			await istore.set("e2b_sandbox_id", "sbx_old");
+			const oldSb = makeSandbox();
+			oldSb.sandboxId = "sbx_old";
+			const newSb = makeSandbox();
+			newSb.sandboxId = "sbx_new";
+			// While we reconnect to sbx_old, a sibling swaps the handle to
+			// sbx_new — the old sandbox still answers connect() successfully.
+			sandboxMock.connect.mockImplementation(async (id: string) => {
+				if (id === "sbx_old") {
+					await istore.set("e2b_sandbox_id", "sbx_new");
+					return oldSb;
+				}
+				return newSb;
+			});
+
+			const h = makeHarness({ apiKey: "test-key" }, istore);
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+			// The acquire must have retried and landed on the authoritative one.
+			const capability = h.provided.get(PAREL_SANDBOX_CAPABILITY) as SandboxCapability;
+			expect(capability.id).toBe("sbx_new");
+		});
+
 		it("skips the kill when lifecycle.stop loses the retire race", async () => {
 			const istore = makeInstanceStore();
 			await istore.set("e2b_sandbox_id", "sbx_shared");
