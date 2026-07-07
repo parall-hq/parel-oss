@@ -48,7 +48,44 @@ interface Harness {
 	store: Map<string, unknown>;
 }
 
-function makeHarness(config: Record<string, unknown> = { apiKey: "test-key" }): Harness {
+// In-memory InstanceStore with real cas() semantics. One of these shared by two
+// harnesses simulates two sessions of the same agent instance.
+function makeInstanceStore() {
+	const rows = new Map<string, { value: unknown; version: number }>();
+	return {
+		rows,
+		async get<T>(key: string) {
+			const row = rows.get(key);
+			return row ? { value: row.value as T, version: row.version } : null;
+		},
+		async set<T>(key: string, value: T) {
+			rows.set(key, { value, version: (rows.get(key)?.version ?? 0) + 1 });
+		},
+		async delete(key: string) {
+			rows.delete(key);
+		},
+		async list(prefix?: string) {
+			return [...rows.keys()].filter((key) => !prefix || key.startsWith(prefix));
+		},
+		async cas<T>(key: string, expectedVersion: number | null, value: T) {
+			const current = rows.get(key)?.version ?? null;
+			if (current !== expectedVersion) return false;
+			rows.set(key, { value, version: (current ?? 0) + 1 });
+			return true;
+		},
+		async casDelete(key: string, expectedVersion: number) {
+			const current = rows.get(key)?.version ?? null;
+			if (current !== expectedVersion) return false;
+			rows.delete(key);
+			return true;
+		},
+	};
+}
+
+function makeHarness(
+	config: Record<string, unknown> = { apiKey: "test-key" },
+	instanceStore?: ReturnType<typeof makeInstanceStore>,
+): Harness {
 	const provided = new Map<string, unknown>();
 	const hooks = new Map<LifecycleEventType, () => Promise<void>>();
 	const tools = new Map<string, ToolHandler>();
@@ -69,6 +106,8 @@ function makeHarness(config: Record<string, unknown> = { apiKey: "test-key" }): 
 				return [...store.keys()].filter((key) => !prefix || key.startsWith(prefix));
 			},
 		},
+		instanceStore,
+		instance: instanceStore ? { key: "main", ephemeral: false } : undefined,
 		inputs: {} as PluginContext["inputs"],
 		model: {} as PluginContext["model"],
 		log: { debug() {}, info() {}, warn() {}, error() {} },
@@ -650,6 +689,321 @@ describe("@parel/sandbox-e2b", () => {
 			await expect(call).rejects.toThrow("torn down during recovery");
 			const capability = h.provided.get(PAREL_SANDBOX_CAPABILITY) as SandboxCapability;
 			expect(await capability.lifecycle?.isRunning()).toBe(false);
+		});
+	});
+
+	describe("instance mode (ctx.instanceStore present)", () => {
+		it("adopts the instance's existing sandbox on session:start instead of creating", async () => {
+			const istore = makeInstanceStore();
+			await istore.set("e2b_sandbox_id", "sbx_shared");
+			const shared = makeSandbox();
+			shared.sandboxId = "sbx_shared";
+			sandboxMock.connect.mockResolvedValue(shared);
+
+			const h = makeHarness({ apiKey: "test-key" }, istore);
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+			expect(sandboxMock.connect).toHaveBeenCalledWith("sbx_shared", { apiKey: "test-key" });
+			expect(sandboxMock.create).not.toHaveBeenCalled();
+		});
+
+		it("cold-start race: exactly one sibling wins, the loser reaps its orphan and adopts", async () => {
+			const istore = makeInstanceStore();
+			const sbA = makeSandbox();
+			sbA.sandboxId = "sbx_a";
+			const sbB = makeSandbox();
+			sbB.sandboxId = "sbx_b";
+			sandboxMock.create.mockResolvedValueOnce(sbA).mockResolvedValueOnce(sbB);
+			// The loser re-reads and connects to the winner's sandbox.
+			sandboxMock.connect.mockImplementation(async (id: string) => (id === "sbx_a" ? sbA : sbB));
+
+			const hA = makeHarness({ apiKey: "test-key" }, istore);
+			const hB = makeHarness({ apiKey: "test-key" }, istore);
+			await sandboxE2bPlugin.setup(hA.ctx);
+			await sandboxE2bPlugin.setup(hB.ctx);
+			await Promise.all([
+				hA.hooks.get(LifecycleEvent.SessionStart)?.(),
+				hB.hooks.get(LifecycleEvent.SessionStart)?.(),
+			]);
+
+			// One authoritative handle; the losing creation was killed.
+			const winner = (await istore.get<string>("e2b_sandbox_id"))?.value;
+			expect(["sbx_a", "sbx_b"]).toContain(winner);
+			const loser = winner === "sbx_a" ? "sbx_b" : "sbx_a";
+			expect(sandboxMock.kill).toHaveBeenCalledWith(loser, { apiKey: "test-key" });
+			expect(sandboxMock.kill).not.toHaveBeenCalledWith(winner, { apiKey: "test-key" });
+		});
+
+		it("session:end releases the local handle but never kills the shared sandbox", async () => {
+			const istore = makeInstanceStore();
+			await istore.set("e2b_sandbox_id", "sbx_shared");
+			const shared = makeSandbox();
+			shared.sandboxId = "sbx_shared";
+			sandboxMock.connect.mockResolvedValue(shared);
+
+			const h = makeHarness({ apiKey: "test-key" }, istore);
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+			await h.hooks.get(LifecycleEvent.SessionEnd)?.();
+
+			expect(sandboxMock.kill).not.toHaveBeenCalled();
+			expect((await istore.get<string>("e2b_sandbox_id"))?.value).toBe("sbx_shared");
+			const capability = h.provided.get(PAREL_SANDBOX_CAPABILITY) as SandboxCapability;
+			expect(await capability.lifecycle?.isRunning()).toBe(false);
+		});
+
+		it("migrates a live legacy per-session sandbox into the instance store", async () => {
+			const istore = makeInstanceStore();
+			const legacy = makeSandbox();
+			legacy.sandboxId = "sbx_legacy";
+			sandboxMock.connect.mockResolvedValue(legacy);
+
+			const h = makeHarness({ apiKey: "test-key" }, istore);
+			h.store.set("e2b_sandbox_id", "sbx_legacy");
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+			expect((await istore.get<string>("e2b_sandbox_id"))?.value).toBe("sbx_legacy");
+			expect(h.store.has("e2b_sandbox_id")).toBe(false);
+			expect(sandboxMock.create).not.toHaveBeenCalled();
+			expect(sandboxMock.kill).not.toHaveBeenCalled();
+		});
+
+		it("migrates legacy process/port records along with a promoted sandbox", async () => {
+			const istore = makeInstanceStore();
+			const legacy = makeSandbox();
+			legacy.sandboxId = "sbx_legacy";
+			sandboxMock.connect.mockResolvedValue(legacy);
+
+			const h = makeHarness({ apiKey: "test-key" }, istore);
+			h.store.set("e2b_sandbox_id", "sbx_legacy");
+			h.store.set("e2b_process:p1", { id: "p1", pid: 9, status: "running" });
+			h.store.set("e2b_port:3000", { id: "3000", port: 3000 });
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+			// The sandbox's running processes/ports must stay visible after the
+			// upgrade — their records follow the sandbox into the instance store.
+			expect(await istore.list("e2b_process:")).toEqual(["e2b_process:p1"]);
+			expect(await istore.list("e2b_port:")).toEqual(["e2b_port:3000"]);
+			expect(h.store.size).toBe(0);
+		});
+
+		it("drops ghost process/port records when the legacy sandbox is reaped", async () => {
+			const istore = makeInstanceStore();
+			await istore.set("e2b_sandbox_id", "sbx_shared");
+			const shared = makeSandbox();
+			shared.sandboxId = "sbx_shared";
+			const legacy = makeSandbox();
+			legacy.sandboxId = "sbx_legacy";
+			sandboxMock.connect.mockImplementation(async (id: string) =>
+				id === "sbx_shared" ? shared : legacy,
+			);
+
+			const h = makeHarness({ apiKey: "test-key" }, istore);
+			h.store.set("e2b_sandbox_id", "sbx_legacy");
+			h.store.set("e2b_process:p1", { id: "p1", pid: 9, status: "running" });
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+			// The legacy sandbox was killed — its process records are ghosts and
+			// must not pollute the shared instance's tables.
+			expect(await istore.list("e2b_process:")).toEqual([]);
+			expect(h.store.size).toBe(0);
+		});
+
+		it("reaps its legacy sandbox when a sibling's is already authoritative", async () => {
+			const istore = makeInstanceStore();
+			await istore.set("e2b_sandbox_id", "sbx_shared");
+			const shared = makeSandbox();
+			shared.sandboxId = "sbx_shared";
+			const legacy = makeSandbox();
+			legacy.sandboxId = "sbx_legacy";
+			sandboxMock.connect.mockImplementation(async (id: string) =>
+				id === "sbx_shared" ? shared : legacy,
+			);
+
+			const h = makeHarness({ apiKey: "test-key" }, istore);
+			h.store.set("e2b_sandbox_id", "sbx_legacy");
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+			// The shared sandbox wins; the legacy one is an orphan and must be
+			// killed (a paused snapshot would otherwise be billed forever).
+			expect(sandboxMock.kill).toHaveBeenCalledWith("sbx_legacy", { apiKey: "test-key" });
+			expect((await istore.get<string>("e2b_sandbox_id"))?.value).toBe("sbx_shared");
+			expect(h.store.has("e2b_sandbox_id")).toBe(false);
+		});
+
+		it("replaces an unreachable shared sandbox via versioned cas", async () => {
+			const istore = makeInstanceStore();
+			await istore.set("e2b_sandbox_id", "sbx_dead");
+			sandboxMock.connect.mockResolvedValue(null);
+			sandboxMock.connect.mockRejectedValue(new Error("gone"));
+			const fresh = makeSandbox();
+			fresh.sandboxId = "sbx_fresh";
+			sandboxMock.create.mockResolvedValue(fresh);
+
+			const h = makeHarness({ apiKey: "test-key" }, istore);
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+			expect((await istore.get<string>("e2b_sandbox_id"))?.value).toBe("sbx_fresh");
+			expect(sandboxMock.kill).toHaveBeenCalledWith("sbx_dead", { apiKey: "test-key" });
+		});
+
+		it("explicit lifecycle.stop kills the instance sandbox and clears the handle", async () => {
+			const istore = makeInstanceStore();
+			await istore.set("e2b_sandbox_id", "sbx_shared");
+			const shared = makeSandbox();
+			shared.sandboxId = "sbx_shared";
+			sandboxMock.connect.mockResolvedValue(shared);
+			sandboxMock.kill.mockResolvedValue(true);
+
+			const h = makeHarness({ apiKey: "test-key" }, istore);
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+			const capability = h.provided.get(PAREL_SANDBOX_CAPABILITY) as SandboxCapability;
+			await capability.lifecycle?.stop();
+
+			expect(sandboxMock.kill).toHaveBeenCalledWith("sbx_shared", { apiKey: "test-key" });
+			expect(await istore.get("e2b_sandbox_id")).toBeNull();
+		});
+
+		it("drops a cached handle when a sibling replaced the shared sandbox", async () => {
+			const istore = makeInstanceStore();
+			await istore.set("e2b_sandbox_id", "sbx_old");
+			const oldSb = makeSandbox();
+			oldSb.sandboxId = "sbx_old";
+			const newSb = makeSandbox();
+			newSb.sandboxId = "sbx_new";
+			newSb.files.read.mockResolvedValue("from new sandbox");
+			sandboxMock.connect.mockImplementation(async (id: string) =>
+				id === "sbx_old" ? oldSb : newSb,
+			);
+
+			const h = makeHarness({ apiKey: "test-key" }, istore);
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.(); // caches sbx_old
+
+			// A sibling replaces the shared sandbox behind our back.
+			await istore.set("e2b_sandbox_id", "sbx_new");
+
+			// The next tool call must notice the stale handle and re-acquire.
+			expect(await h.tools.get("file_read")?.({ path: "/x" }, toolCtx)).toBe("from new sandbox");
+			expect(sandboxMock.connect).toHaveBeenCalledWith("sbx_new", { apiKey: "test-key" });
+		});
+
+		it("concurrent tool calls survive a sibling's replacement without TypeError", async () => {
+			const istore = makeInstanceStore();
+			await istore.set("e2b_sandbox_id", "sbx_old");
+			const oldSb = makeSandbox();
+			oldSb.sandboxId = "sbx_old";
+			const newSb = makeSandbox();
+			newSb.sandboxId = "sbx_new";
+			newSb.files.read.mockResolvedValue("from new sandbox");
+			sandboxMock.connect.mockImplementation(async (id: string) =>
+				id === "sbx_old" ? oldSb : newSb,
+			);
+
+			const h = makeHarness({ apiKey: "test-key" }, istore);
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.(); // caches sbx_old
+			await istore.set("e2b_sandbox_id", "sbx_new"); // sibling swaps
+
+			// Both calls enter the staleness check together; the first nulls the
+			// shared slot — the second must not crash on it (captured local).
+			const [a, b] = await Promise.all([
+				h.tools.get("file_read")?.({ path: "/a" }, toolCtx),
+				h.tools.get("file_read")?.({ path: "/b" }, toolCtx),
+			]);
+			expect(a).toBe("from new sandbox");
+			expect(b).toBe("from new sandbox");
+		});
+
+		it("does not adopt a sandbox superseded during the reconnect window", async () => {
+			const istore = makeInstanceStore();
+			await istore.set("e2b_sandbox_id", "sbx_old");
+			const oldSb = makeSandbox();
+			oldSb.sandboxId = "sbx_old";
+			const newSb = makeSandbox();
+			newSb.sandboxId = "sbx_new";
+			// While we reconnect to sbx_old, a sibling swaps the handle to
+			// sbx_new — the old sandbox still answers connect() successfully.
+			sandboxMock.connect.mockImplementation(async (id: string) => {
+				if (id === "sbx_old") {
+					await istore.set("e2b_sandbox_id", "sbx_new");
+					return oldSb;
+				}
+				return newSb;
+			});
+
+			const h = makeHarness({ apiKey: "test-key" }, istore);
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+			// The acquire must have retried and landed on the authoritative one.
+			const capability = h.provided.get(PAREL_SANDBOX_CAPABILITY) as SandboxCapability;
+			expect(capability.id).toBe("sbx_new");
+		});
+
+		it("skips the kill when lifecycle.stop loses the retire race", async () => {
+			const istore = makeInstanceStore();
+			await istore.set("e2b_sandbox_id", "sbx_shared");
+			const shared = makeSandbox();
+			shared.sandboxId = "sbx_shared";
+			sandboxMock.connect.mockResolvedValue(shared);
+
+			// Sabotage casDelete to simulate a sibling swapping mid-stop.
+			istore.casDelete = async () => false;
+
+			const h = makeHarness({ apiKey: "test-key" }, istore);
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+			const capability = h.provided.get(PAREL_SANDBOX_CAPABILITY) as SandboxCapability;
+			await capability.lifecycle?.stop();
+
+			expect(sandboxMock.kill).not.toHaveBeenCalled();
+			expect((await istore.get<string>("e2b_sandbox_id"))?.value).toBe("sbx_shared");
+		});
+
+		it("destroys the sandbox on session:end for an ephemeral instance", async () => {
+			const istore = makeInstanceStore();
+			const sandbox = makeSandbox();
+			sandbox.sandboxId = "sbx_eph";
+			sandboxMock.create.mockResolvedValue(sandbox);
+			sandboxMock.kill.mockResolvedValue(true);
+
+			const h = makeHarness({ apiKey: "test-key" }, istore);
+			(h.ctx as { instance?: { key: string | null; ephemeral: boolean } }).instance = {
+				key: null,
+				ephemeral: true,
+			};
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+			await h.hooks.get(LifecycleEvent.SessionEnd)?.();
+
+			// Ephemeral instance dies with the session: nothing could ever stop
+			// this sandbox later, so SessionEnd must kill it.
+			expect(sandboxMock.kill).toHaveBeenCalledWith("sbx_eph", { apiKey: "test-key" });
+		});
+
+		it("stores process records in the instance store so siblings see them", async () => {
+			const istore = makeInstanceStore();
+			const sandbox = makeSandbox();
+			sandbox.sandboxId = "sbx_shared";
+			sandboxMock.create.mockResolvedValue(sandbox);
+			sandbox.commands.run.mockResolvedValue({ pid: 7, disconnect: async () => {} });
+
+			const h = makeHarness({ apiKey: "test-key" }, istore);
+			await sandboxE2bPlugin.setup(h.ctx);
+			const processes = h.provided.get("process") as SandboxProcessCapability;
+			await processes.start("sleep 1000");
+
+			const keys = await istore.list("e2b_process:");
+			expect(keys).toHaveLength(1);
+			expect(h.store.size).toBe(0);
 		});
 	});
 });

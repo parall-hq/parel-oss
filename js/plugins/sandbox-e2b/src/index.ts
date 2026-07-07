@@ -192,13 +192,40 @@ export default definePlugin({
 		// command in the sandbox (no per-command prefix needed) — lets the host
 		// hand the in-sandbox process its credentials/config at boot time.
 		const envs = (ctx.config.env as Record<string, string> | undefined) ?? {};
+
+		// Instance-scoped state (docs/agent-instance-model.md §4.3): when the host
+		// provides ctx.instanceStore, the sandbox belongs to the AGENT INSTANCE —
+		// every session of the instance shares one sandbox, a conversation reset
+		// keeps it, and ending one session must not kill it. On hosts without
+		// instance storage (istore === undefined) behavior stays exactly
+		// per-session — explicit probing, no silent downgrade of the sharing
+		// promise. Captured here; hooks/tools reach it by closure.
+		const istore = ctx.instanceStore;
+		// Process/port records live wherever the sandbox lives: they describe
+		// state inside the shared machine, so sibling sessions must see them.
+		const state = istore
+			? {
+					async get<T>(key: string): Promise<T | null> {
+						return (await istore.get<T>(key))?.value ?? null;
+					},
+					set<T>(key: string, value: T): Promise<void> {
+						return istore.set(key, value);
+					},
+					delete(key: string): Promise<void> {
+						return istore.delete(key);
+					},
+					list(prefix?: string): Promise<string[]> {
+						return istore.list(prefix);
+					},
+				}
+			: ctx.store;
 		let sandbox: Sandbox | null = null;
 		let sandboxRecovery: Promise<Sandbox> | null = null;
 		// Bumped on teardown so an in-flight recovery can tell its result is
 		// stale and must not be published (or leak) after the session ended.
 		let sandboxEpoch = 0;
 
-		async function createSandbox(): Promise<Sandbox> {
+		async function createRawSandbox(): Promise<Sandbox> {
 			if (!apiKey) {
 				// A missing key is a deployment/config error: fail loudly and early.
 				// Silently skipping creation here used to let the whole session run
@@ -222,10 +249,16 @@ export default definePlugin({
 				const msg = err instanceof Error ? err.message : "Unknown error";
 				throw new Error(`Failed to create E2B sandbox: ${msg}`, { cause: err });
 			}
-			await ctx.store.set(STORE_KEY, s.sandboxId);
 			ctx.log.info(
 				`E2B sandbox created: ${s.sandboxId}${persistence ? " (persistent: pause-on-timeout)" : ""}`,
 			);
+			return s;
+		}
+
+		// Per-session mode only: create and publish to the session store.
+		async function createSandbox(): Promise<Sandbox> {
+			const s = await createRawSandbox();
+			await ctx.store.set(STORE_KEY, s.sandboxId);
 			return s;
 		}
 
@@ -262,8 +295,107 @@ export default definePlugin({
 			}
 		}
 
+		// Process/port records belong to their sandbox. When the legacy sandbox
+		// is promoted they must follow it into the instance store (its background
+		// processes are still running — dropping the records would blind
+		// list/tail/stop/revoke); when it is reaped or dead they are ghosts and
+		// must be deleted instead.
+		async function moveLegacyRecords(promote: boolean): Promise<void> {
+			for (const prefix of [PROCESS_STORE_PREFIX, PORT_STORE_PREFIX]) {
+				for (const key of await ctx.store.list(prefix)) {
+					if (promote) {
+						const record = await ctx.store.get(key);
+						if (record !== null) await state.set(key, record);
+					}
+					await ctx.store.delete(key);
+				}
+			}
+		}
+
+		// One-time migration sweep for a pre-instance-mode session: a legacy
+		// per-session handle either becomes the instance's authoritative sandbox
+		// (files survive the upgrade), or — when a sibling's sandbox already
+		// holds authority — it is an orphan that MUST be reaped: nothing else
+		// ever references it, and a paused snapshot would be billed forever.
+		// Runs before every acquire; a missing legacy key makes it free.
+		async function migrateLegacyHandle(): Promise<void> {
+			if (!istore) return;
+			const legacy = await ctx.store.get<string>(STORE_KEY);
+			if (!legacy) return;
+			const authoritative = await istore.get<string>(STORE_KEY);
+			if (!authoritative) {
+				const reconnected = await reconnectSandbox(legacy);
+				if (!reconnected) {
+					// Dead handle — nothing to promote or reap.
+					await ctx.store.delete(STORE_KEY);
+					await moveLegacyRecords(false);
+					return;
+				}
+				if (await istore.cas(STORE_KEY, null, legacy)) {
+					await ctx.store.delete(STORE_KEY);
+					await moveLegacyRecords(true);
+					ctx.log.info(`E2B sandbox ${legacy} migrated to the instance store`);
+					return;
+				}
+				// Lost the promotion race — fall through to the orphan check.
+			}
+			if ((await istore.get<string>(STORE_KEY))?.value !== legacy) {
+				await killSandboxById(legacy);
+				ctx.log.info(`E2B legacy sandbox ${legacy} reaped (instance already has a sandbox)`);
+			}
+			await ctx.store.delete(STORE_KEY);
+			await moveLegacyRecords(false);
+		}
+
+		// Instance mode: acquire the ONE sandbox shared by every session of this
+		// agent instance. The authoritative handle lives in the instance store;
+		// all mutations go through cas() because sibling sessions' turns race
+		// here (two cold starts, or two sessions replacing an unreachable
+		// sandbox). The loser of any race kills its own orphan and adopts the
+		// winner's sandbox on the next pass.
+		async function acquireSharedSandbox(): Promise<Sandbox> {
+			if (!istore) throw new Error("acquireSharedSandbox requires an instance store");
+			await migrateLegacyHandle();
+			for (let attempt = 0; attempt < 3; attempt++) {
+				const entry = await istore.get<string>(STORE_KEY);
+				if (entry) {
+					const reconnected = await reconnectSandbox(entry.value);
+					if (reconnected) {
+						// A sibling may have swapped the handle while we were
+						// reconnecting — the superseded sandbox can still answer
+						// connect() before the sibling's kill lands. Only adopt the
+						// handle if it is still authoritative; otherwise retry
+						// against the current one.
+						const current = await istore.get<string>(STORE_KEY);
+						if (current?.value === entry.value) return reconnected;
+						continue;
+					}
+					// Authoritative sandbox unreachable — replace it, guarded by the
+					// observed version so only one sibling wins the swap. Create the
+					// replacement FIRST (see the per-session path for why).
+					const fresh = await createRawSandbox();
+					if (await istore.cas(STORE_KEY, entry.version, fresh.sandboxId)) {
+						ctx.log.warn(
+							`E2B filesystem reset: sandbox ${entry.value} was unreachable, swapped in ${fresh.sandboxId} (files in the previous sandbox are lost)`,
+						);
+						await killSandboxById(entry.value);
+						return fresh;
+					}
+					// A sibling already swapped in its replacement — discard ours.
+					await killSandboxById(fresh.sandboxId);
+					continue;
+				}
+				const fresh = await createRawSandbox();
+				if (await istore.cas(STORE_KEY, null, fresh.sandboxId)) return fresh;
+				// Lost the cold-start race — exactly one sibling won; use theirs.
+				await killSandboxById(fresh.sandboxId);
+			}
+			throw new Error("E2B sandbox acquisition kept losing instance-store races; giving up");
+		}
+
 		// Reconnect to the stored sandbox if there is one, else create fresh.
 		// Shared by the SessionResume warm path and the ensureSandbox fallback.
+		// Per-session mode only; instance mode uses acquireSharedSandbox.
 		async function acquireSandbox(): Promise<Sandbox> {
 			const savedId = await ctx.store.get<string>(STORE_KEY);
 			if (savedId) {
@@ -287,6 +419,12 @@ export default definePlugin({
 			return createSandbox();
 		}
 
+		// Mode dispatch: instance mode shares one sandbox per agent instance,
+		// per-session mode keeps the historical one-sandbox-per-session behavior.
+		function acquire(): Promise<Sandbox> {
+			return istore ? acquireSharedSandbox() : acquireSandbox();
+		}
+
 		// Tool/capability call path. Lifecycle hooks stay the warm path; this is
 		// the fallback for when they were skipped or misfired, so the first tool
 		// call self-heals instead of the whole turn failing on a dead sandbox.
@@ -294,15 +432,38 @@ export default definePlugin({
 		// of racing N sandbox creations. A failed recovery clears the slot so the
 		// next call retries rather than caching the failure.
 		async function ensureSandbox(): Promise<Sandbox> {
-			if (sandbox) return sandbox;
+			// Capture the cached handle BEFORE any await: two concurrent tool
+			// calls can enter this block together, and the first to notice a
+			// stale handle nulls the shared `sandbox` — the second must compare
+			// against its own captured reference, not re-read the mutated slot.
+			const cached = sandbox;
+			if (cached) {
+				if (!istore) return cached;
+				// Instance mode: a sibling session may have replaced the shared
+				// sandbox (unreachable → swap). A cached local handle would keep
+				// this session on the dead machine forever, silently splitting the
+				// instance's "one shared filesystem". One instance-store read per
+				// tool call is cheap next to the sandbox operation itself.
+				const authoritative = await istore.get<string>(STORE_KEY);
+				if (authoritative?.value === cached.sandboxId) return cached;
+				if (sandbox === cached) sandbox = null; // stale — re-acquire below
+			}
 			if (!sandboxRecovery) {
 				const epoch = sandboxEpoch;
-				sandboxRecovery = acquireSandbox()
+				sandboxRecovery = acquire()
 					.then(async (s) => {
 						if (epoch !== sandboxEpoch) {
 							// The session tore down while this recovery was in flight.
-							// Publishing now would resurrect a sandbox nothing will ever
-							// clean up — reap it and stay torn down instead.
+							if (istore) {
+								// Instance mode: the acquired sandbox is (or just became)
+								// the instance's shared sandbox — sibling sessions own it
+								// too, so just drop our reference. Any orphan we created
+								// and lost a race with was already reaped inside
+								// acquireSharedSandbox.
+								throw new Error("E2B sandbox recovery discarded: session torn down");
+							}
+							// Per-session mode: nothing else will ever clean it up —
+							// reap it and stay torn down instead.
 							await killSandboxById(s.sandboxId);
 							await ctx.store.delete(STORE_KEY);
 							throw new Error("E2B sandbox was torn down during recovery");
@@ -317,6 +478,22 @@ export default definePlugin({
 			return sandboxRecovery;
 		}
 
+		// Drop this session's reference to the shared sandbox WITHOUT killing it:
+		// in instance mode the sandbox belongs to the agent instance, and sibling
+		// sessions (or the next conversation) keep using it. E2B's own idle
+		// timeout / pause-on-timeout governs its lifetime from here.
+		async function releaseSandbox(): Promise<void> {
+			sandboxEpoch++;
+			if (sandboxRecovery) {
+				await sandboxRecovery.catch(() => {});
+			}
+			sandbox = null;
+		}
+
+		// Explicit destruction (per-session SessionEnd, or the lifecycle.stop
+		// capability). In instance mode this kills the INSTANCE's sandbox — only
+		// reachable via an explicit stop request, never from a session merely
+		// ending.
 		async function destroySandbox(): Promise<void> {
 			sandboxEpoch++;
 			// Settle any in-flight recovery before finishing: after the epoch bump
@@ -330,6 +507,30 @@ export default definePlugin({
 			// Resolve the target from the live handle or the stored id — a session
 			// can end while only the store knows the sandbox (hooks misfired), and
 			// a paused snapshot would otherwise be retained (and billed) forever.
+			if (istore) {
+				sandbox = null;
+				const entry = await istore.get<string>(STORE_KEY);
+				if (entry) {
+					// Retire the handle BEFORE killing, and only the exact version we
+					// observed: a sibling may be swapping in a replacement right now,
+					// and an unconditional delete would erase its fresh id without
+					// killing that sandbox (a live orphan). casDelete makes the race
+					// explicit — if we lose, the handle now points at a different
+					// sandbox and this stop no longer owns the kill.
+					const retired = (await istore.casDelete?.(STORE_KEY, entry.version)) ?? false;
+					if (!retired && istore.casDelete) {
+						ctx.log.warn("E2B stop skipped: the instance sandbox changed mid-stop");
+						await ctx.store.delete(STORE_KEY);
+						return;
+					}
+					if (!istore.casDelete) await istore.delete(STORE_KEY); // legacy host fallback
+					if (await killSandboxById(entry.value)) {
+						ctx.log.info(`E2B sandbox destroyed: ${entry.value}`);
+					}
+				}
+				await ctx.store.delete(STORE_KEY);
+				return;
+			}
 			const sandboxId = sandbox?.sandboxId ?? (await ctx.store.get<string>(STORE_KEY));
 			sandbox = null;
 			if (sandboxId && (await killSandboxById(sandboxId))) {
@@ -341,15 +542,26 @@ export default definePlugin({
 		// --- Lifecycle hooks ---
 
 		ctx.hook(LifecycleEvent.SessionStart, async () => {
-			sandbox = await createSandbox();
+			// Instance mode: adopt the instance's existing sandbox instead of
+			// unconditionally creating one — this is where sibling sessions start
+			// sharing a machine.
+			sandbox = istore ? await acquire() : await createSandbox();
 		});
 
 		ctx.hook(LifecycleEvent.SessionEnd, async () => {
-			await destroySandbox();
+			// Instance mode: the conversation ends, the entity lives on — EXCEPT
+			// for an ephemeral instance (try-run/replay), which dies with the
+			// session: its store is discarded, so nothing could ever stop the
+			// sandbox later, and a persistence-mode paused snapshot would be
+			// billed indefinitely.
+			if (istore && !ctx.instance?.ephemeral) await releaseSandbox();
+			else await destroySandbox();
 		});
 
 		ctx.hook(LifecycleEvent.SessionSuspend, async () => {
-			if (sandbox) {
+			// Instance mode: the authoritative handle is already in the instance
+			// store (written at creation/adoption) — nothing to save.
+			if (!istore && sandbox) {
 				await ctx.store.set(STORE_KEY, sandbox.sandboxId);
 				ctx.log.info(`Sandbox ID saved for resume: ${sandbox.sandboxId}`);
 			}
@@ -362,7 +574,7 @@ export default definePlugin({
 			// stale handle would satisfy ensureSandbox forever and block the
 			// self-healing retry; null lets the next tool call recover.
 			sandbox = null;
-			sandbox = await acquireSandbox();
+			sandbox = await acquire();
 		});
 
 		// --- Capabilities ---
@@ -515,7 +727,7 @@ export default definePlugin({
 					startedAt: new Date().toISOString(),
 					status: "running",
 				};
-				await ctx.store.set(storeKey(PROCESS_STORE_PREFIX, id), record);
+				await state.set(storeKey(PROCESS_STORE_PREFIX, id), record);
 				await handle.disconnect().catch((err: unknown) => {
 					const msg = err instanceof Error ? err.message : "Unknown error";
 					ctx.log.warn(`Failed to disconnect from background command ${id}: ${msg}`);
@@ -524,9 +736,9 @@ export default definePlugin({
 			},
 			async list() {
 				const s = await ensureSandbox();
-				const keys = await ctx.store.list(PROCESS_STORE_PREFIX);
+				const keys = await state.list(PROCESS_STORE_PREFIX);
 				const records = (
-					await Promise.all(keys.map((key) => ctx.store.get<SandboxProcessHandle>(key)))
+					await Promise.all(keys.map((key) => state.get<SandboxProcessHandle>(key)))
 				).filter((record): record is SandboxProcessHandle => Boolean(record));
 				const runningPids = new Set((await s.commands.list()).map((process) => process.pid));
 				return records.map((record) => ({
@@ -541,7 +753,7 @@ export default definePlugin({
 			},
 			async tail(processId, opts = {}) {
 				const s = await ensureSandbox();
-				const record = await ctx.store.get<SandboxProcessHandle>(
+				const record = await state.get<SandboxProcessHandle>(
 					storeKey(PROCESS_STORE_PREFIX, processId),
 				);
 				if (!record) throw new Error(`unknown process: ${processId}`);
@@ -561,13 +773,13 @@ export default definePlugin({
 			},
 			async stop(processId) {
 				const s = await ensureSandbox();
-				const record = await ctx.store.get<SandboxProcessHandle>(
+				const record = await state.get<SandboxProcessHandle>(
 					storeKey(PROCESS_STORE_PREFIX, processId),
 				);
 				if (!record) throw new Error(`unknown process: ${processId}`);
 				const stopped = await s.commands.kill(record.pid);
 				const next: SandboxProcessHandle = { ...record, status: "stopped" };
-				await ctx.store.set(storeKey(PROCESS_STORE_PREFIX, processId), next);
+				await state.set(storeKey(PROCESS_STORE_PREFIX, processId), next);
 				return { stopped, process: next };
 			},
 		};
@@ -589,21 +801,21 @@ export default definePlugin({
 					url: portUrl(host, protocol),
 					createdAt: new Date().toISOString(),
 				};
-				await ctx.store.set(storeKey(PORT_STORE_PREFIX, handle.id), handle);
+				await state.set(storeKey(PORT_STORE_PREFIX, handle.id), handle);
 				return handle;
 			},
 			async list() {
-				const keys = await ctx.store.list(PORT_STORE_PREFIX);
-				return (await Promise.all(keys.map((key) => ctx.store.get<SandboxPortHandle>(key)))).filter(
+				const keys = await state.list(PORT_STORE_PREFIX);
+				return (await Promise.all(keys.map((key) => state.get<SandboxPortHandle>(key)))).filter(
 					(record): record is SandboxPortHandle => Boolean(record),
 				);
 			},
 			async revoke(port) {
 				const normalizedPort = positiveInt(port, 0, 65_535);
 				const key = storeKey(PORT_STORE_PREFIX, String(normalizedPort));
-				const existing = await ctx.store.get<SandboxPortHandle>(key);
+				const existing = await state.get<SandboxPortHandle>(key);
 				if (!existing) return false;
-				await ctx.store.delete(key);
+				await state.delete(key);
 				return true;
 			},
 		};

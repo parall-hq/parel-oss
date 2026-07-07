@@ -64,6 +64,14 @@ export interface InstanceStore {
 	 * write won.
 	 */
 	cas<T = unknown>(key: string, expectedVersion: number | null, value: T): Promise<boolean>;
+	/**
+	 * Compare-and-delete: removes the key only if its current version matches
+	 * `expectedVersion`. The safe way to retire a shared resource handle — an
+	 * unconditional delete() can erase a sibling's just-swapped-in replacement.
+	 * Optional: probe (`istore.casDelete?.(…)`) and fall back to delete() on
+	 * hosts that predate it.
+	 */
+	casDelete?(key: string, expectedVersion: number): Promise<boolean>;
 }
 
 /** Identity of the agent instance a session belongs to. */
