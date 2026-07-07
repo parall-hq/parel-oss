@@ -41,6 +41,8 @@ Plugins receive a `PluginContext` with:
 | --- | --- |
 | `config` | User-provided plugin config. |
 | `store` | Plugin-scoped session store. |
+| `instanceStore` | Instance-scoped store shared across the sessions of one agent instance. Optional — `undefined` on hosts without instance storage. |
+| `instance` | Identity of the owning agent instance (`{ key, ephemeral }`). Optional. |
 | `inputs` | Session input queue for steering and interrupts. |
 | `log` | Plugin logger. |
 | `model` | Access to the configured model gateway. |
@@ -48,6 +50,70 @@ Plugins receive a `PluginContext` with:
 | `tool` | Register tools callable by the model. |
 | `provide` / `require` | Capability registry. |
 | `interrupt` | Request session interruption. |
+
+## Instance-Scoped State
+
+An agent *instance* is the long-lived entity behind one or more sessions: its
+sandbox, its long-term memory, its working state. Compute always runs inside a
+session; `ctx.instanceStore` is the bucket that outlives any single
+conversation. Pick the bucket with one question: **"if the user starts a new
+conversation, should this data still be there?"** Yes → `instanceStore`; no →
+`store`.
+
+The two buckets differ in more than lifetime:
+
+| | `ctx.store` (session) | `ctx.instanceStore` (instance) |
+| --- | --- | --- |
+| Lifetime | One conversation | The entity; survives conversation resets |
+| Writers | Single writer (turns are serialized per session) | **Multi-writer** — sibling sessions' turns may write concurrently |
+| Write pattern | Read-modify-write freely | Prefer `cas()`; plain `set()` is last-write-wins |
+| Namespacing | Plugin-named at setup | Plugin-named, always |
+
+Both stores are only injected into the **setup** context; hook and tool
+handlers reach them by closure capture:
+
+```ts
+export default {
+  name: "example-sandbox",
+  version: "1.0.0",
+  async setup(ctx) {
+    const istore = ctx.instanceStore; // capture once
+    ctx.hook("turn:start", async () => {
+      if (!istore) return; // host has no instance storage: degrade honestly
+      const cur = await istore.get("sandbox");
+      if (cur) return resume(cur.value.id);
+      const sb = await createSandbox();
+      const won = await istore.cas("sandbox", null, { id: sb.id });
+      if (!won) {
+        await sb.kill(); // lost the race: adopt the winner's sandbox
+        const winner = await istore.get("sandbox");
+        await resume(winner.value.id);
+      }
+    });
+  },
+};
+```
+
+`cas(key, expectedVersion, value)` writes only if the key's current version
+matches (`null` = the key must not exist yet) and returns whether the write
+won. Two sessions racing to create one shared resource is the canonical use:
+exactly one `cas(key, null, …)` succeeds and the loser re-reads.
+
+Rules of the road:
+
+- **Probe explicitly.** `instanceStore` is `undefined` on hosts that predate
+  it. Never fall back to `ctx.store` silently for data you promise to keep
+  long-term — degrade visibly instead (e.g. report that long-term memory is
+  unavailable).
+- **There are no instance lifecycle hooks.** First use initializes
+  (`get(...) ?? create`), and an instance reset simply empties the store — on
+  the next turn your plugin sees no state and starts fresh, the same self-heal
+  path it already needs for expired external resources.
+- **`ctx.instance.ephemeral === true`** marks a throwaway instance that dies
+  with the session (try-runs, replays). Skip expensive persistence there.
+- **State is not shared across plugins.** Each plugin gets its own namespace.
+  To expose shared access to a resource (e.g. one sandbox used by several
+  plugins), provide a capability via `ctx.provide` instead of sharing keys.
 
 ## Execution Control
 
