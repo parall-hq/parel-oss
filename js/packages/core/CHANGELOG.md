@@ -1,5 +1,12 @@
 # @parel/core
 
+## 0.13.0
+
+### Minor Changes
+
+- 25352cf: `InstanceStore.casDelete?(key, expectedVersion)` — compare-and-delete for retiring shared resource handles. An unconditional `delete()` can erase a sibling session's just-swapped-in replacement handle without killing the resource it points at; `casDelete` makes the retire race explicit. Optional: probe and fall back to `delete()` on hosts that predate it.
+- 45d8e5d: Add instance-scoped plugin state contract: `InstanceStore` (versioned get/set/delete/list + `cas`), `InstanceStoreEntry`, `InstanceInfo`, and optional `PluginContext.instanceStore` / `PluginContext.instance`. The instance bucket is shared across every session of the same agent instance and is multi-writer — prefer `cas()` for read-modify-write. `undefined` on hosts without instance storage: probe explicitly and degrade honestly (hosts never substitute the per-session store).
+
 ## 0.12.0
 
 ### Minor Changes

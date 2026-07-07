@@ -1,5 +1,12 @@
 # @parel/workspace
 
+## 0.1.11
+
+### Patch Changes
+
+- Updated dependencies [25352cf]
+  - @parel/plugin-sdk@0.10.1
+
 ## 0.1.10
 
 ### Patch Changes

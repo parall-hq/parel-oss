@@ -1,5 +1,12 @@
 # @parel/channel-telegram
 
+## 0.2.11
+
+### Patch Changes
+
+- Updated dependencies [25352cf]
+  - @parel/plugin-sdk@0.10.1
+
 ## 0.2.10
 
 ### Patch Changes
