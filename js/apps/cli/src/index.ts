@@ -478,6 +478,14 @@ function readAgentConfig(file: string): ParsedAgentConfig {
 	};
 }
 
+/** The `agent.name` declared in the config, used to address the versions
+ *  resource (`POST /agents/:name/versions`). Undefined when the config omits it. */
+function readAgentName(file: string): string | undefined {
+	const raw = parseYaml(readFileSync(file, "utf-8")) as unknown;
+	if (!isRecord(raw) || !isRecord(raw.agent)) return undefined;
+	return stringValue(raw.agent.name);
+}
+
 function readJsonFile(file: string): Record<string, unknown> {
 	try {
 		const parsed = JSON.parse(readFileSync(file, "utf-8")) as unknown;
@@ -684,6 +692,8 @@ async function deployAgentFile(
 	id: string;
 	name: string;
 	version?: number;
+	versionId?: string;
+	active?: boolean;
 	uploaded_secrets: Array<{ name: string; source: string }>;
 }> {
 	const secrets = gatherDeploySecrets(
@@ -701,7 +711,13 @@ async function deployAgentFile(
 	}
 	const req = await buildAgentDeployRequest(file, server, secrets);
 	const res = await apiFetch(server, path, { method, headers: req.headers, body: req.body });
-	const agent = (await res.json()) as { id: string; name: string; version?: number };
+	const agent = (await res.json()) as {
+		id: string;
+		name: string;
+		version?: number;
+		versionId?: string;
+		active?: boolean;
+	};
 	return {
 		...agent,
 		uploaded_secrets: secrets.map((s) => ({ name: s.name, source: s.source })),
@@ -1460,6 +1476,10 @@ const deploy = defineCommand({
 	meta: { name: "deploy", description: "Deploy an agent from a YAML config" },
 	args: {
 		file: { type: "positional", description: "Path to agent.yaml", required: true },
+		"no-activate": {
+			type: "boolean",
+			description: "Upload as a staged version without making it live; promote it later",
+		},
 		"require-ready": { type: "boolean", description: "Run capability doctor before deploy" },
 		secret: {
 			type: "string",
@@ -1476,6 +1496,10 @@ const deploy = defineCommand({
 			if (args["require-ready"])
 				await requireAgentReady(args.file, resolveServer(args), args, secretOverrides);
 			const server = resolveServer(args);
+			if (args["no-activate"]) {
+				await deployStagedVersion(server, args.file, args, secretOverrides);
+				return;
+			}
 			const agent = await deployAgentFile(server, args.file, "POST", "/agents", {
 				args,
 				secretOverrides,
@@ -1490,6 +1514,46 @@ const deploy = defineCommand({
 		}
 	},
 });
+
+// `deploy --no-activate`: upload a new version via the resource-shaped endpoint
+// and stage it (?activate=false) instead of flipping the live deployment. The
+// server reads `activate` from the query when the body omits it, so the shared
+// deploy-request builder (JSON or text/yaml body) is reused untouched.
+async function deployStagedVersion(
+	server: string,
+	file: string,
+	args: JsonArgs,
+	secretOverrides: Record<string, string>,
+): Promise<void> {
+	const name = readAgentName(file);
+	if (!name)
+		fail("--no-activate needs `agent.name` in the config to address the version.", EXIT_CLI);
+	const agent = await deployAgentFile(
+		server,
+		file,
+		"POST",
+		`/agents/${encodeURIComponent(name)}/versions?activate=false`,
+		{ args, secretOverrides },
+	);
+	const vLabel = agent.version ? `v${agent.version}` : "version";
+	if (agent.active) {
+		// A brand-new agent's first version is always live — staging it would leave
+		// the agent with no runnable version, so the server activates it anyway.
+		outputSuccess(
+			agent,
+			`${c.green(`Deployed: ${agent.name} ${vLabel}`)} ${c.dim("(first version is always live)")}  ${c.dim(agent.id)}`,
+			args,
+		);
+		return;
+	}
+	outputSuccess(
+		agent,
+		`${c.green(`Staged: ${agent.name} ${vLabel}`)} ${c.dim("(not live)")}\n` +
+			`  ${c.dim("try it:")}     parel try ${name} --version ${vLabel} -m "..."\n` +
+			`  ${c.dim("promote it:")} parel promote ${name} --version ${vLabel}`,
+		args,
+	);
+}
 
 // ── Commands: agents ────────────────────────────────────────────────
 
@@ -1704,7 +1768,10 @@ const deployments = defineCommand({
 });
 
 const rollback = defineCommand({
-	meta: { name: "rollback", description: "Roll back an agent to a previous version" },
+	meta: {
+		name: "rollback",
+		description: "Roll back to a previous version (equivalent to `promote` of an older version)",
+	},
 	args: {
 		agent: { type: "positional", description: "Agent name or id", required: true },
 		to: {
@@ -1738,6 +1805,285 @@ const rollback = defineCommand({
 		} catch (err) {
 			handleError(err);
 		}
+	},
+});
+
+const promote = defineCommand({
+	meta: {
+		name: "promote",
+		description: "Make a version the live deployment (promote forward or roll back)",
+	},
+	args: {
+		agent: { type: "positional", description: "Agent name or id", required: true },
+		version: {
+			type: "string",
+			description: "Version to make live (e.g. v3, 3, or a version id)",
+			required: true,
+		},
+		json: { type: "boolean" },
+		server: { type: "string" },
+	},
+	async run({ args }) {
+		requireAuth(args);
+		try {
+			const res = await apiFetch(
+				resolveServer(args),
+				`/agents/${encodeURIComponent(args.agent)}/deployments`,
+				{
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ version: args.version }),
+				},
+			);
+			const data = (await res.json()) as { id: string; name: string; version: number };
+			outputSuccess(data, c.green(`Promoted ${data.name} to v${data.version} (live)`), args);
+		} catch (err) {
+			handleError(err);
+		}
+	},
+});
+
+// ── Commands: try (throwaway ephemeral run) ─────────────────────────
+
+const tryRun = defineCommand({
+	meta: {
+		name: "try",
+		description: "Run one throwaway (ephemeral) turn — optionally against a specific version",
+	},
+	args: {
+		agent: { type: "positional", description: "Agent name or id", required: true },
+		version: {
+			type: "string",
+			description: "Try a specific version (e.g. v3); implies an ephemeral run",
+		},
+		message: { type: "string", alias: "m", description: "Message text (required)" },
+		timeout: { type: "string", alias: "t", description: "Wait timeout in seconds", default: "120" },
+		json: { type: "boolean" },
+		server: { type: "string" },
+	},
+	async run({ args }) {
+		requireAuth(args);
+		const server = resolveServer(args);
+		const json = args as { json?: boolean };
+		// `try` is a single non-interactive turn; interactive use is `parel chat`.
+		if (!args.message)
+			fail("Provide --message/-m. For an interactive session use `parel chat`.", EXIT_CLI);
+
+		// Ephemeral session: a version pin forces ephemeral server-side; without a
+		// version we ask for ephemeral explicitly so the run leaves no named entity.
+		let sessionId = "";
+		try {
+			const res = await apiFetch(server, "/sessions", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					agent: args.agent,
+					...(args.version ? { version: args.version } : { ephemeral: true }),
+				}),
+			});
+			sessionId = ((await res.json()) as { id: string }).id;
+		} catch (err) {
+			handleError(err);
+		}
+
+		const wsUrl = server.replace("https://", "wss://").replace("http://", "ws://");
+		const timeoutSec = parseInt(args.timeout, 10) || 120;
+		const result = await collectTurn(wsUrl, sessionId, args.message, timeoutSec);
+
+		if (result.status === "timeout") {
+			if (wantsJson(json)) console.log(JSON.stringify(result));
+			else console.error(c.yellow(`Timeout after ${timeoutSec}s. Session: ${sessionId}`));
+			process.exit(EXIT_TIMEOUT);
+		}
+		if (result.status === "error") {
+			if (wantsJson(json)) console.log(JSON.stringify(result));
+			else console.error(c.red(`Error: ${result.error}`));
+			process.exit(EXIT_API);
+		}
+
+		outputSuccess(result, result.response, json);
+	},
+});
+
+// ── Commands: instances ─────────────────────────────────────────────
+
+const instancesList = defineCommand({
+	meta: { name: "list", description: "List an agent's instances" },
+	args: {
+		agent: { type: "positional", description: "Agent name or id", required: true },
+		json: { type: "boolean" },
+		server: { type: "string" },
+	},
+	async run({ args }) {
+		requireAuth(args);
+		try {
+			const server = resolveServer(args);
+			const res = await apiFetch(server, `/agents/${encodeURIComponent(args.agent)}/instances`);
+			const list = (await res.json()) as Record<string, unknown>[];
+			if (wantsJson(args)) {
+				console.log(JSON.stringify(list));
+				return;
+			}
+			// The instances API carries only the pinned version id; resolve ids to
+			// friendly `vN` labels via /versions, but only when something is pinned.
+			// Best-effort: a /versions hiccup falls back to showing the raw id.
+			let numberByVersionId: Map<string, number> | undefined;
+			if (list.some((i) => i.tracking === "pinned" && i.pinned_version_id)) {
+				try {
+					const vres = await apiFetch(server, `/agents/${encodeURIComponent(args.agent)}/versions`);
+					const versions = (await vres.json()) as Array<{ id: string; number: number }>;
+					numberByVersionId = new Map(versions.map((v) => [v.id, v.number]));
+				} catch {}
+			}
+			printTable(
+				list.map((i) => {
+					const pinnedId = (i.pinned_version_id as string | null) ?? null;
+					const num = pinnedId ? numberByVersionId?.get(pinnedId) : undefined;
+					const pinned =
+						i.tracking !== "pinned" ? c.dim("—") : num != null ? `v${num}` : (pinnedId ?? "");
+					return { key: i.key, tracking: i.tracking, pinned, sessions: i.session_count ?? 0 };
+				}),
+			);
+		} catch (err) {
+			handleError(err);
+		}
+	},
+});
+
+const instancesPin = defineCommand({
+	meta: { name: "pin", description: "Pin an instance to a specific version" },
+	args: {
+		agent: { type: "positional", description: "Agent name or id", required: true },
+		key: { type: "positional", description: "Instance key", required: true },
+		version: {
+			type: "string",
+			description: "Version to pin (e.g. v3, 3, or a version id)",
+			required: true,
+		},
+		json: { type: "boolean" },
+		server: { type: "string" },
+	},
+	async run({ args }) {
+		requireAuth(args);
+		try {
+			const res = await apiFetch(
+				resolveServer(args),
+				`/agents/${encodeURIComponent(args.agent)}/instances/${encodeURIComponent(args.key)}`,
+				{
+					method: "PATCH",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ tracking: "pinned", version: args.version }),
+				},
+			);
+			const data = (await res.json()) as { key: string; pinned_version_id: string | null };
+			// Echo the version the user asked for (e.g. `v3`); the response only
+			// carries the resolved version id.
+			outputSuccess(data, c.green(`Pinned ${data.key} → ${args.version}`), args);
+		} catch (err) {
+			handleError(err);
+		}
+	},
+});
+
+const instancesUnpin = defineCommand({
+	meta: { name: "unpin", description: "Return an instance to tracking the live deployment" },
+	args: {
+		agent: { type: "positional", description: "Agent name or id", required: true },
+		key: { type: "positional", description: "Instance key", required: true },
+		json: { type: "boolean" },
+		server: { type: "string" },
+	},
+	async run({ args }) {
+		requireAuth(args);
+		try {
+			const res = await apiFetch(
+				resolveServer(args),
+				`/agents/${encodeURIComponent(args.agent)}/instances/${encodeURIComponent(args.key)}`,
+				{
+					method: "PATCH",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ tracking: "live" }),
+				},
+			);
+			const data = (await res.json()) as { key: string };
+			outputSuccess(data, c.green(`Unpinned ${data.key} (now tracking live)`), args);
+		} catch (err) {
+			handleError(err);
+		}
+	},
+});
+
+const instancesReset = defineCommand({
+	meta: {
+		name: "reset",
+		description: "Wipe an instance's entity state (sandbox, memory); keeps its sessions",
+	},
+	args: {
+		agent: { type: "positional", description: "Agent name or id", required: true },
+		key: { type: "positional", description: "Instance key", required: true },
+		json: { type: "boolean" },
+		server: { type: "string" },
+	},
+	async run({ args }) {
+		requireAuth(args);
+		try {
+			const res = await apiFetch(
+				resolveServer(args),
+				`/agents/${encodeURIComponent(args.agent)}/instances/${encodeURIComponent(args.key)}/reset`,
+				{ method: "POST" },
+			);
+			const data = (await res.json()) as { key: string };
+			outputSuccess(data, c.green(`Reset ${data.key}`), args);
+		} catch (err) {
+			handleError(err);
+		}
+	},
+});
+
+const instancesDelete = defineCommand({
+	meta: { name: "delete", description: "Delete an instance and purge its entity state" },
+	args: {
+		agent: { type: "positional", description: "Agent name or id", required: true },
+		key: { type: "positional", description: "Instance key", required: true },
+		json: { type: "boolean" },
+		server: { type: "string" },
+	},
+	async run({ args }) {
+		requireAuth(args);
+		try {
+			await apiFetch(
+				resolveServer(args),
+				`/agents/${encodeURIComponent(args.agent)}/instances/${encodeURIComponent(args.key)}`,
+				{ method: "DELETE" },
+			);
+			outputSuccess(
+				{ deleted: true, key: args.key },
+				c.green(`Deleted instance ${args.key}`),
+				args,
+			);
+		} catch (err) {
+			// A 409 means live sessions still hold the instance; point at the fix
+			// instead of surfacing a bare conflict (human mode only — JSON keeps the
+			// clean server message for scripts).
+			if (err instanceof ApiError && err.status === 409 && !wantsJson(args)) {
+				fail(
+					`${err.message}\n  ${c.dim(`List them: parel sessions list --agent ${args.agent}`)}`,
+					EXIT_API,
+				);
+			}
+			handleError(err);
+		}
+	},
+});
+
+const instances = defineCommand({
+	meta: { name: "instances", description: "Agent instance management" },
+	subCommands: {
+		list: instancesList,
+		pin: instancesPin,
+		unpin: instancesUnpin,
+		reset: instancesReset,
+		delete: instancesDelete,
 	},
 });
 
@@ -1827,19 +2173,27 @@ const sessionsCreate = defineCommand({
 	meta: { name: "create", description: "Create a new session" },
 	args: {
 		agent: { type: "positional", required: true },
+		instance: { type: "string", description: "Target a named instance (default: main)" },
 		json: { type: "boolean" },
 		server: { type: "string" },
 	},
 	async run({ args }) {
 		requireAuth(args);
 		try {
-			const res = await apiFetch(resolveServer(args), `/agents/${args.agent}/sessions`, {
-				method: "POST",
-			});
-			const session = (await res.json()) as { id: string; status: string };
+			const server = resolveServer(args);
+			// A named instance uses the top-level resource shape; the bare path keeps
+			// the legacy per-agent endpoint (unchanged) during its deprecation window.
+			const res = args.instance
+				? await apiFetch(server, "/sessions", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ agent: args.agent, instance: args.instance }),
+					})
+				: await apiFetch(server, `/agents/${args.agent}/sessions`, { method: "POST" });
+			const session = (await res.json()) as { id: string; status: string; instance?: string };
 			outputSuccess(
 				session,
-				`${c.green(`Session: ${session.id}`)}  ${c.dim(session.status)}`,
+				`${c.green(`Session: ${session.id}`)}  ${c.dim(session.status)}${session.instance ? c.dim(` @${session.instance}`) : ""}`,
 				args,
 			);
 		} catch (err) {
@@ -2684,6 +3038,7 @@ ${c.bold("PAREL")} ${d(`v${VERSION}`)} — deploy and manage AI agents
 ${c.bold("QUICK START")}
   ${g("parel send")} --agent <id> -m "text"     Send message, wait for response
   ${g("parel run")}  agent.yaml -m "text"        Deploy + send in one shot
+  ${g("parel try")}  <agent> -m "text"           Throwaway run ${d("(ephemeral)")}
   ${g("parel chat")} --agent <id>                Interactive REPL ${d("(for humans)")}
 
 ${c.bold("ENVIRONMENT")}
@@ -2692,8 +3047,9 @@ ${c.bold("ENVIRONMENT")}
   ${g("PAREL_SERVER")}      Override API server URL
 
 ${c.bold("COMMANDS")}
-  ${g("send")}, ${g("run")}                 Send messages, get results
-  ${g("deploy")}, ${g("agents")}             Manage agent configs
+  ${g("send")}, ${g("run")}, ${g("try")}            Send messages, get results
+  ${g("deploy")}, ${g("promote")}, ${g("agents")}     Deploy, roll out, manage configs
+  ${g("instances")}                 Pin versions, reset instance state
   ${g("sessions")}, ${g("chat")}             Session lifecycle
   ${g("logs")}, ${g("steer")}               Observe and control running agents
   ${g("capabilities")}              Check agent.yaml readiness
@@ -2722,11 +3078,14 @@ const main = defineCommand({
 		send,
 		run,
 		deploy,
+		try: tryRun,
 		chat,
 		agents,
 		versions,
 		deployments,
 		rollback,
+		promote,
+		instances,
 		sessions,
 		logs,
 		steer,
