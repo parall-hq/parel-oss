@@ -95,6 +95,34 @@ paths must be deployed with the CLI.
 
 Model provider packages must not be listed under `plugins`.
 
+## Channels
+
+The optional top-level `channels:` array declares channel connector bindings
+provisioned at deploy time — the platform freezes the connector plugin,
+creates (or updates) the connection, and binds it to the agent. Declarations
+are idempotent across redeploys and additive to the control-plane channel API.
+
+```yaml
+channels:
+  - type: managed_ws
+    plugin: "@parel/channel-slack-socket"
+    config:
+      appToken: ${SLACK_APP_TOKEN}
+    routing:
+      mode: per_subject
+    instance: customer-a
+```
+
+- `routing.mode` splits conversations (`main` | `per_subject` | `per_actor` |
+  `isolated`); every split shares the same agent instance.
+- `instance` routes the binding's conversations into a named agent instance
+  (default `main`): all of the binding's conversations share that instance's
+  entity state — its sandbox, its memory — and follow its version tracking
+  (a pinned instance holds its conversations at the pin).
+- `config` values may be `${SECRET_REF}` references resolved at the org scope.
+- `observe` opts the binding into agent-event pushes (`turn`; `steps`/`pause`
+  are contract-reserved).
+
 ## Runtime Controls
 
 `runtime.maxTurns` limits turns per session.
