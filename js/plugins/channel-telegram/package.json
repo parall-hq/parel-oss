@@ -1,6 +1,6 @@
 {
   "name": "@parel/channel-telegram",
-  "version": "0.2.11",
+  "version": "0.2.12",
   "description": "PAREL channel connector for Telegram Bot API webhooks.",
   "license": "MIT",
   "repository": {
