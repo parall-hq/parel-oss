@@ -95,6 +95,55 @@ paths must be deployed with the CLI.
 
 Model provider packages must not be listed under `plugins`.
 
+## Instance Vars and Budgets
+
+Two per-instance controls compose with the instance layer (agents ×
+instances × sessions):
+
+- **Vars** — non-secret per-instance parameters. Set them on an instance
+  (`PATCH /agents/:agent/instances/:key` with `{"vars": {"NAME": "value"}}`,
+  or `parel instances vars`), reference them anywhere in plugin or model
+  config values as `${var:NAME}`. One config, N instances, each with its own
+  prompt variables — no config copies. Values hot-update on the next turn for
+  live sessions; pinned sessions keep their creation-time snapshot (pinned
+  means frozen). Unresolved references stay as literals (visible, debuggable,
+  never fatal). Secrets keep their own `${NAME}` syntax and stores.
+
+- **`runtime.instanceBudgetUsd`** — spend ceiling per instance. Once the
+  total cost across ALL sessions of an instance reaches the ceiling, new
+  turns are refused (the send is blocked with a clear reason; the session
+  stays healthy and resumes once the budget is raised or a new deployment
+  lowers usage). Enforced with one-turn lag: cost accrues at turn finalize,
+  so a turn that starts under budget may finish over it.
+
+## Channels
+
+The optional top-level `channels:` array declares channel connector bindings
+provisioned at deploy time — the platform freezes the connector plugin,
+creates (or updates) the connection, and binds it to the agent. Declarations
+are idempotent across redeploys and additive to the control-plane channel API.
+
+```yaml
+channels:
+  - type: managed_ws
+    plugin: "@parel/channel-slack-socket"
+    config:
+      appToken: ${SLACK_APP_TOKEN}
+    routing:
+      mode: per_subject
+    instance: customer-a
+```
+
+- `routing.mode` splits conversations (`main` | `per_subject` | `per_actor` |
+  `isolated`); every split shares the same agent instance.
+- `instance` routes the binding's conversations into a named agent instance
+  (default `main`): all of the binding's conversations share that instance's
+  entity state — its sandbox, its memory — and follow its version tracking
+  (a pinned instance holds its conversations at the pin).
+- `config` values may be `${SECRET_REF}` references resolved at the org scope.
+- `observe` opts the binding into agent-event pushes (`turn`; `steps`/`pause`
+  are contract-reserved).
+
 ## Runtime Controls
 
 `runtime.maxTurns` limits turns per session.

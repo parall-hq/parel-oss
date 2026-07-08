@@ -27,6 +27,15 @@ parel deploy ./agent.yaml   # deploy an agent; prints its id
 parel chat --agent <id>     # start an interactive session
 ```
 
+Stage a version, try it before it goes live, then promote it:
+
+```bash
+parel deploy ./agent.yaml --no-activate   # upload a staged version (not live)
+parel try <agent> --version v2 -m "hi"    # one throwaway run against v2
+parel promote <agent> --version v2        # make v2 the live deployment
+parel instances list <agent>              # inspect instances and their pinned versions
+```
+
 Interactive commands authenticate session WebSockets with the `parel-v1` and
 `token.<apiKey>` subprotocols. Query-string WebSocket tokens are kept only for
 older clients.

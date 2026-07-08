@@ -4,7 +4,10 @@
   "title": "PAREL Agent Config",
   "description": "Public schema for agent.yaml.",
   "type": "object",
-  "required": ["version", "model"],
+  "required": [
+    "version",
+    "model"
+  ],
   "properties": {
     "version": {
       "type": "string",
@@ -12,7 +15,9 @@
     },
     "agent": {
       "type": "object",
-      "required": ["name"],
+      "required": [
+        "name"
+      ],
       "properties": {
         "name": {
           "type": "string",
@@ -23,7 +28,10 @@
     },
     "model": {
       "type": "object",
-      "required": ["provider", "model"],
+      "required": [
+        "provider",
+        "model"
+      ],
       "properties": {
         "provider": {
           "type": "string",
@@ -60,9 +68,17 @@
           "type": "integer",
           "minimum": 0
         },
+        "instanceBudgetUsd": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Instance-level spend ceiling in USD: once total cost across all sessions of an agent instance reaches this, new turns are refused until the budget is raised (enforced with one-turn lag)."
+        },
         "durability": {
           "type": "string",
-          "enum": ["event-sourced", "ephemeral"]
+          "enum": [
+            "event-sourced",
+            "ephemeral"
+          ]
         },
         "checkpointInterval": {
           "type": "integer",
@@ -78,7 +94,9 @@
         },
         "reasoning": {
           "type": "object",
-          "required": ["enabled"],
+          "required": [
+            "enabled"
+          ],
           "properties": {
             "enabled": {
               "type": "boolean"
@@ -92,11 +110,92 @@
         },
         "deploymentTracking": {
           "type": "string",
-          "enum": ["live", "pinned"],
+          "enum": [
+            "live",
+            "pinned"
+          ],
           "description": "Whether sessions follow the agent's active deployment at turn boundaries (live, default) or keep their creation-time config and plugin lock forever (pinned)."
         }
       },
       "additionalProperties": false
+    },
+    "channels": {
+      "type": "array",
+      "description": "Declarative channel connector bindings provisioned at deploy time (frozen connector + connection + agent binding). Additive to the control-plane channel API.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "plugin"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "webhook",
+              "managed_ws"
+            ],
+            "description": "Connection transport: inbound webhook, or host-managed outgoing WebSocket."
+          },
+          "plugin": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Connector plugin package, e.g. \"@parel/channel-slack-socket\"."
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional connector semver range; frozen to an exact version at deploy time."
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Disambiguator when one agent declares multiple connections of the same (type, plugin)."
+          },
+          "config": {
+            "type": "object",
+            "description": "Connector config; values may be ${SECRET_REF} references resolved at the org scope."
+          },
+          "start": {
+            "type": "boolean",
+            "description": "For managed_ws, whether to start the connection at deploy time (default true)."
+          },
+          "routing": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "mode": {
+                "enum": [
+                  "main",
+                  "per_subject",
+                  "per_actor",
+                  "isolated"
+                ],
+                "description": "Conversation split policy for the auto-created binding (default \"main\")."
+              }
+            }
+          },
+          "instance": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+            "description": "Agent instance the binding routes conversations into (default \"main\"). Every conversation split shares this instance's entity state (sandbox, memory)."
+          },
+          "observe": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "turn",
+                "steps",
+                "pause"
+              ]
+            },
+            "description": "Agent-event push scopes for the auto-created binding (opt-in; omitted = no pushes)."
+          }
+        }
+      }
     }
   },
   "additionalProperties": false,
@@ -109,7 +208,9 @@
         },
         {
           "type": "object",
-          "required": ["plugin"],
+          "required": [
+            "plugin"
+          ],
           "properties": {
             "plugin": {
               "type": "string",
@@ -148,7 +249,10 @@
       "oneOf": [
         {
           "type": "object",
-          "required": ["type", "path"],
+          "required": [
+            "type",
+            "path"
+          ],
           "properties": {
             "type": {
               "type": "string",

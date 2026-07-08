@@ -44,6 +44,13 @@ export type PluginSource = { type: "path"; path: string };
 export interface RuntimeConfig {
 	maxTurns?: number;
 	maxSteps?: number;
+	/**
+	 * Instance-level spend ceiling in USD: once the total cost across ALL
+	 * sessions of an agent instance reaches this, new turns are refused until
+	 * the budget is raised. Enforced with one-turn lag (cost accrues at turn
+	 * finalize). See protocol/agent-config.md.
+	 */
+	instanceBudgetUsd?: number;
 	maxParallelToolCalls?: number;
 	toolResultMaxBytes?: number;
 	durability?: "event-sourced" | "ephemeral";
