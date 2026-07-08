@@ -1,6 +1,6 @@
 {
   "name": "@parel/sandbox-modal",
-  "version": "0.2.9",
+  "version": "0.3.0",
   "description": "PAREL sandbox capability provider plugin for Modal Sandboxes.",
   "license": "MIT",
   "repository": {

@@ -1,5 +1,11 @@
 # @parel/channel-slack-socket
 
+## 0.3.4
+
+### Patch Changes
+
+- @parel/plugin-sdk@0.10.2
+
 ## 0.3.3
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@parel/channel-slack-socket",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "PAREL channel connector for Slack Socket Mode.",
   "license": "MIT",
   "repository": {

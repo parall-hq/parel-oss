@@ -1,5 +1,11 @@
 # @parel/budget-cap
 
+## 0.0.20
+
+### Patch Changes
+
+- @parel/plugin-sdk@0.10.2
+
 ## 0.0.19
 
 ### Patch Changes

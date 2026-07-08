@@ -1,5 +1,12 @@
 # @parel/sandbox-e2b
 
+## 0.5.1
+
+### Patch Changes
+
+- c76b388: Clear ghost process/port records when the instance sandbox is destroyed (explicit `lifecycle.stop`) or replaced after becoming unreachable — records describing a dead machine would mislead sibling sessions' list/tail/stop. Matches the behavior shipped with the vercel/modal/daytona instance-mode migrations.
+  - @parel/plugin-sdk@0.10.2
+
 ## 0.5.0
 
 ### Minor Changes
