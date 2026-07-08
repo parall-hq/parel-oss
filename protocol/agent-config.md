@@ -95,6 +95,27 @@ paths must be deployed with the CLI.
 
 Model provider packages must not be listed under `plugins`.
 
+## Instance Vars and Budgets
+
+Two per-instance controls compose with the instance layer (agents ×
+instances × sessions):
+
+- **Vars** — non-secret per-instance parameters. Set them on an instance
+  (`PATCH /agents/:agent/instances/:key` with `{"vars": {"NAME": "value"}}`,
+  or `parel instances vars`), reference them anywhere in plugin or model
+  config values as `${var:NAME}`. One config, N instances, each with its own
+  prompt variables — no config copies. Values hot-update on the next turn for
+  live sessions; pinned sessions keep their creation-time snapshot (pinned
+  means frozen). Unresolved references stay as literals (visible, debuggable,
+  never fatal). Secrets keep their own `${NAME}` syntax and stores.
+
+- **`runtime.instanceBudgetUsd`** — spend ceiling per instance. Once the
+  total cost across ALL sessions of an instance reaches the ceiling, new
+  turns are refused (the send is blocked with a clear reason; the session
+  stays healthy and resumes once the budget is raised or a new deployment
+  lowers usage). Enforced with one-turn lag: cost accrues at turn finalize,
+  so a turn that starts under budget may finish over it.
+
 ## Channels
 
 The optional top-level `channels:` array declares channel connector bindings

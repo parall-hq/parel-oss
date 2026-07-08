@@ -1985,6 +1985,61 @@ const instancesPin = defineCommand({
 	},
 });
 
+const instancesVars = defineCommand({
+	meta: {
+		name: "vars",
+		description: "Set an instance's ${var:NAME} values (full replacement)",
+	},
+	args: {
+		agent: { type: "positional", description: "Agent name or id", required: true },
+		key: { type: "positional", description: "Instance key", required: true },
+		set: {
+			type: "string",
+			description: "NAME=value pair (repeatable); omit all pairs to clear vars",
+		},
+		json: { type: "boolean" },
+		server: { type: "string" },
+	},
+	async run({ args }) {
+		requireAuth(args);
+		// citty collects repeated flags into an array; a single flag arrives as a string.
+		const pairs = Array.isArray(args.set) ? args.set : args.set ? [args.set] : [];
+		const vars: Record<string, string> = {};
+		for (const pair of pairs) {
+			const eq = pair.indexOf("=");
+			if (eq <= 0) {
+				handleError(new Error(`--set expects NAME=value, got: ${pair}`));
+				return;
+			}
+			vars[pair.slice(0, eq)] = pair.slice(eq + 1);
+		}
+		try {
+			const res = await apiFetch(
+				resolveServer(args),
+				`/agents/${encodeURIComponent(args.agent)}/instances/${encodeURIComponent(args.key)}`,
+				{
+					method: "PATCH",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ vars }),
+				},
+			);
+			const data = (await res.json()) as { key: string };
+			const names = Object.keys(vars);
+			outputSuccess(
+				data,
+				c.green(
+					names.length
+						? `Set ${names.length} var${names.length > 1 ? "s" : ""} on ${data.key}: ${names.join(", ")}`
+						: `Cleared vars on ${data.key}`,
+				),
+				args,
+			);
+		} catch (err) {
+			handleError(err);
+		}
+	},
+});
+
 const instancesUnpin = defineCommand({
 	meta: { name: "unpin", description: "Return an instance to tracking the live deployment" },
 	args: {
@@ -2081,6 +2136,7 @@ const instances = defineCommand({
 	subCommands: {
 		list: instancesList,
 		pin: instancesPin,
+		vars: instancesVars,
 		unpin: instancesUnpin,
 		reset: instancesReset,
 		delete: instancesDelete,

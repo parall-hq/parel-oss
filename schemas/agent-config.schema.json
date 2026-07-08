@@ -68,6 +68,11 @@
           "type": "integer",
           "minimum": 0
         },
+        "instanceBudgetUsd": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Instance-level spend ceiling in USD: once total cost across all sessions of an agent instance reaches this, new turns are refused until the budget is raised (enforced with one-turn lag)."
+        },
         "durability": {
           "type": "string",
           "enum": [
