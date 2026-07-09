@@ -61,17 +61,38 @@
       "default": {},
       "properties": {
         "maxTurns": {
-          "type": "integer",
-          "minimum": 0
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "$ref": "#/$defs/instanceVarRef"
+            }
+          ]
         },
         "maxSteps": {
-          "type": "integer",
-          "minimum": 0
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "$ref": "#/$defs/instanceVarRef"
+            }
+          ]
         },
         "instanceBudgetUsd": {
-          "type": "number",
-          "exclusiveMinimum": 0,
-          "description": "Instance-level spend ceiling in USD: once total cost across all sessions of an agent instance reaches this, new turns are refused until the budget is raised (enforced with one-turn lag)."
+          "description": "Instance-level spend ceiling in USD: once total cost across all sessions of an agent instance reaches this, new turns are refused until the budget is raised (enforced with one-turn lag).",
+          "oneOf": [
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            {
+              "$ref": "#/$defs/instanceVarRef"
+            }
+          ]
         },
         "durability": {
           "type": "string",
@@ -81,16 +102,37 @@
           ]
         },
         "checkpointInterval": {
-          "type": "integer",
-          "minimum": 1
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "$ref": "#/$defs/instanceVarRef"
+            }
+          ]
         },
         "maxParallelToolCalls": {
-          "type": "integer",
-          "minimum": 1
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "$ref": "#/$defs/instanceVarRef"
+            }
+          ]
         },
         "toolResultMaxBytes": {
-          "type": "integer",
-          "minimum": 1
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "$ref": "#/$defs/instanceVarRef"
+            }
+          ]
         },
         "reasoning": {
           "type": "object",
@@ -99,11 +141,25 @@
           ],
           "properties": {
             "enabled": {
-              "type": "boolean"
+              "oneOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/$defs/instanceVarRef"
+                }
+              ]
             },
             "budgetTokens": {
-              "type": "integer",
-              "minimum": 1
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "$ref": "#/$defs/instanceVarRef"
+                }
+              ]
             }
           },
           "additionalProperties": false
@@ -200,6 +256,11 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "instanceVarRef": {
+      "type": "string",
+      "pattern": "^\\$\\{var:[A-Za-z_][A-Za-z0-9_]*\\}$",
+      "description": "Whole-value instance-var reference. The hosted runtime substitutes the instance's var at turn boundaries (type-aware: a value that parses as the field's number/boolean type substitutes as that type) and re-validates the field there; an unset var or a value of the wrong type fails the turn before any model call. Typed runtime knobs only — durability and deploymentTracking never take references, and a ref embedded in a longer string does not qualify."
+    },
     "pluginDeclaration": {
       "oneOf": [
         {

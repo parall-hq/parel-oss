@@ -106,8 +106,21 @@ instances × sessions):
   config values as `${var:NAME}`. One config, N instances, each with its own
   prompt variables — no config copies. Values hot-update on the next turn for
   live sessions; pinned sessions keep their creation-time snapshot (pinned
-  means frozen). Unresolved references stay as literals (visible, debuggable,
-  never fatal). Secrets keep their own `${NAME}` syntax and stores.
+  means frozen). In plugin config, unresolved references stay as literals
+  (visible, debuggable, never fatal). Secrets keep their own `${NAME}` syntax
+  and stores.
+
+  Typed `runtime` knobs (`maxTurns`, `maxSteps`, `instanceBudgetUsd`,
+  `maxParallelToolCalls`, `toolResultMaxBytes`, `checkpointInterval`,
+  `reasoning.enabled`, `reasoning.budgetTokens`) may hold a **whole-value**
+  reference — `enabled: "${var:REASONING}"` deploys fine, and the runtime
+  substitutes type-aware per instance at turn boundaries (`"true"` → boolean,
+  `"16384"` → number) and re-validates the field's real type there. In the
+  `model` and `runtime` blocks references fail fast: an unset var or a value
+  of the wrong type fails the turn before any model call is made. A reference
+  embedded in a longer string does not qualify as whole-value, and
+  `durability` / `deploymentTracking` (session-shape enums) never take
+  references.
 
 - **`runtime.instanceBudgetUsd`** — spend ceiling per instance. Once the
   total cost across ALL sessions of an instance reaches the ceiling, new
