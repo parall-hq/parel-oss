@@ -8,7 +8,24 @@ Most endpoints require:
 Authorization: Bearer pk_...
 ```
 
-Errors use [../schemas/api-error.schema.json](../schemas/api-error.schema.json).
+## Errors
+
+Error responses use [../schemas/api-error.schema.json](../schemas/api-error.schema.json):
+a JSON object carrying a human-readable `error` string plus optional fields.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `error` | string | Human-readable message. Always present. |
+| `code` | string, optional | Stable machine-readable error code — lowercase snake_case (`^[a-z][a-z0-9_]*$`). Additive: match on it for programmatic handling, but always tolerate its absence and fall back to `error`. Treat an unknown code as a generic failure. |
+| `details` | any, optional | Structured context, e.g. config-validation details. |
+| `request_id` | string, optional | Correlates the response with server logs. |
+
+```json
+{
+  "error": "Agent not found",
+  "code": "agent_not_found"
+}
+```
 
 ## Health
 

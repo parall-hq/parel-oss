@@ -685,7 +685,6 @@ async function buildAgentDeployRequest(
 async function deployAgentFile(
 	server: string,
 	file: string,
-	method: "POST" | "PUT",
 	path: string,
 	opts: { args: JsonArgs; secretOverrides?: Record<string, string> },
 ): Promise<{
@@ -710,7 +709,11 @@ async function deployAgentFile(
 		}
 	}
 	const req = await buildAgentDeployRequest(file, server, secrets);
-	const res = await apiFetch(server, path, { method, headers: req.headers, body: req.body });
+	const res = await apiFetch(server, path, {
+		method: "POST",
+		headers: req.headers,
+		body: req.body,
+	});
 	const agent = (await res.json()) as {
 		id: string;
 		name: string;
@@ -722,6 +725,21 @@ async function deployAgentFile(
 		...agent,
 		uploaded_secrets: secrets.map((s) => ({ name: s.name, source: s.source })),
 	};
+}
+
+// All session creation goes through the top-level resource route
+// (docs/agent-instance-model.md §5.2): the agent reference travels in the body,
+// with an optional named instance alongside it. The server always returns status.
+async function createSession(
+	server: string,
+	body: { agent: string; instance?: string },
+): Promise<{ id: string; status: string; instance?: string }> {
+	const res = await apiFetch(server, "/sessions", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(body),
+	});
+	return (await res.json()) as { id: string; status: string; instance?: string };
 }
 
 function credentialProviderForModel(provider: string, config: Record<string, unknown>): string {
@@ -1233,8 +1251,7 @@ const send = defineCommand({
 		if (!sessionId) {
 			if (!args.agent) fail("Provide --agent or --session", EXIT_CLI);
 			try {
-				const res = await apiFetch(server, `/agents/${args.agent}/sessions`, { method: "POST" });
-				const sess = (await res.json()) as { id: string };
+				const sess = await createSession(server, { agent: args.agent });
 				sessionId = sess.id;
 			} catch (err) {
 				handleError(err);
@@ -1312,9 +1329,8 @@ const run = defineCommand({
 
 		let agentId = "";
 		try {
-			const agent = await deployAgentFile(server, args.file, "POST", "/agents", {
-				args: json,
-				secretOverrides,
+			const agent = await deployAgentVersion(server, args.file, json, secretOverrides, {
+				activate: true,
 			});
 			agentId = agent.id;
 		} catch (err) {
@@ -1324,8 +1340,7 @@ const run = defineCommand({
 		// Create session
 		let sessionId = "";
 		try {
-			const res = await apiFetch(server, `/agents/${agentId}/sessions`, { method: "POST" });
-			const sess = (await res.json()) as { id: string };
+			const sess = await createSession(server, { agent: agentId });
 			sessionId = sess.id;
 		} catch (err) {
 			handleError(err);
@@ -1500,9 +1515,8 @@ const deploy = defineCommand({
 				await deployStagedVersion(server, args.file, args, secretOverrides);
 				return;
 			}
-			const agent = await deployAgentFile(server, args.file, "POST", "/agents", {
-				args,
-				secretOverrides,
+			const agent = await deployAgentVersion(server, args.file, args, secretOverrides, {
+				activate: true,
 			});
 			outputSuccess(
 				agent,
@@ -1515,26 +1529,36 @@ const deploy = defineCommand({
 	},
 });
 
-// `deploy --no-activate`: upload a new version via the resource-shaped endpoint
-// and stage it (?activate=false) instead of flipping the live deployment. The
-// server reads `activate` from the query when the body omits it, so the shared
-// deploy-request builder (JSON or text/yaml body) is reused untouched.
+// Deploy a new version via the resource-shaped endpoint (POST /agents/:name/versions):
+// the name in the path addresses the agent (the path IS its identity), replacing the
+// deprecated body-named POST /agents. `activate: false` stages the version
+// (?activate=false) instead of flipping the live deployment; the server reads
+// `activate` from the query when the body omits it, so the shared deploy-request
+// builder (JSON or text/yaml body) is reused untouched.
+async function deployAgentVersion(
+	server: string,
+	file: string,
+	args: JsonArgs,
+	secretOverrides: Record<string, string>,
+	opts: { activate: boolean },
+): Promise<Awaited<ReturnType<typeof deployAgentFile>>> {
+	const name = readAgentName(file);
+	if (!name) fail("Deploy needs `agent.name` in the config to address the version.", EXIT_CLI);
+	const query = opts.activate ? "" : "?activate=false";
+	return deployAgentFile(server, file, `/agents/${encodeURIComponent(name)}/versions${query}`, {
+		args,
+		secretOverrides,
+	});
+}
+
+// `deploy --no-activate`: stage a new version without flipping the live deployment.
 async function deployStagedVersion(
 	server: string,
 	file: string,
 	args: JsonArgs,
 	secretOverrides: Record<string, string>,
 ): Promise<void> {
-	const name = readAgentName(file);
-	if (!name)
-		fail("--no-activate needs `agent.name` in the config to address the version.", EXIT_CLI);
-	const agent = await deployAgentFile(
-		server,
-		file,
-		"POST",
-		`/agents/${encodeURIComponent(name)}/versions?activate=false`,
-		{ args, secretOverrides },
-	);
+	const agent = await deployAgentVersion(server, file, args, secretOverrides, { activate: false });
 	const vLabel = agent.version ? `v${agent.version}` : "version";
 	if (agent.active) {
 		// A brand-new agent's first version is always live — staging it would leave
@@ -1549,8 +1573,8 @@ async function deployStagedVersion(
 	outputSuccess(
 		agent,
 		`${c.green(`Staged: ${agent.name} ${vLabel}`)} ${c.dim("(not live)")}\n` +
-			`  ${c.dim("try it:")}     parel try ${name} --version ${vLabel} -m "..."\n` +
-			`  ${c.dim("promote it:")} parel promote ${name} --version ${vLabel}`,
+			`  ${c.dim("try it:")}     parel try ${agent.name} --version ${vLabel} -m "..."\n` +
+			`  ${c.dim("promote it:")} parel promote ${agent.name} --version ${vLabel}`,
 		args,
 	);
 }
@@ -1619,10 +1643,12 @@ const agentsUpdate = defineCommand({
 		if (!existsSync(args.file)) fail(`File not found: ${args.file}`, EXIT_CLI);
 		try {
 			const server = resolveServer(args);
-			const agent = await deployAgentFile(server, args.file, "PUT", `/agents/${args.id}`, {
-				args,
-				secretOverrides: parseSecretOverrides(args.secret),
-			});
+			const agent = await deployAgentFile(
+				server,
+				args.file,
+				`/agents/${encodeURIComponent(args.id)}/versions`,
+				{ args, secretOverrides: parseSecretOverrides(args.secret) },
+			);
 			outputSuccess(
 				agent,
 				c.green(`Updated: ${agent.name}${agent.version ? ` v${agent.version}` : ""} (${agent.id})`),
@@ -2237,16 +2263,10 @@ const sessionsCreate = defineCommand({
 		requireAuth(args);
 		try {
 			const server = resolveServer(args);
-			// A named instance uses the top-level resource shape; the bare path keeps
-			// the legacy per-agent endpoint (unchanged) during its deprecation window.
-			const res = args.instance
-				? await apiFetch(server, "/sessions", {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ agent: args.agent, instance: args.instance }),
-					})
-				: await apiFetch(server, `/agents/${args.agent}/sessions`, { method: "POST" });
-			const session = (await res.json()) as { id: string; status: string; instance?: string };
+			const session = await createSession(server, {
+				agent: args.agent,
+				...(args.instance ? { instance: args.instance } : {}),
+			});
 			outputSuccess(
 				session,
 				`${c.green(`Session: ${session.id}`)}  ${c.dim(session.status)}${session.instance ? c.dim(` @${session.instance}`) : ""}`,
@@ -2285,8 +2305,7 @@ const chat = defineCommand({
 		if (!sessionId) {
 			if (!args.agent) fail("Provide --agent or --session", EXIT_CLI);
 			try {
-				const res = await apiFetch(server, `/agents/${args.agent}/sessions`, { method: "POST" });
-				sessionId = ((await res.json()) as { id: string }).id;
+				sessionId = (await createSession(server, { agent: args.agent })).id;
 			} catch (err) {
 				handleError(err);
 			}

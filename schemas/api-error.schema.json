@@ -11,7 +11,9 @@
     },
     "details": true,
     "code": {
-      "type": "string"
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "Stable machine-readable error code; additive, optional. Lowercase snake_case (e.g. agent_not_found)."
     },
     "request_id": {
       "type": "string"
