@@ -100,9 +100,45 @@ Invalid config returns `400`:
 | `POST` | `/execution/snapshots/{snapshotId}/branches` | branch options | Create a branch session from a snapshot. |
 | `POST` | `/execution/snapshots/{snapshotId}/replays` | replay options | Create a replay session from a snapshot. |
 | `GET` | `/execution/branches/{branchId}` | none | Get an execution branch/replay record. |
-| `POST` | `/sessions/{sessionId}/messages` | `{ "content": "..." }` | Start an async turn. |
+| `POST` | `/sessions/{sessionId}/messages` | `{ "content": string \| Part[] }` | Start an async turn. See [Media input](#media-input). |
 | `POST` | `/sessions/{sessionId}/steer` | `{ "content": "..." }` | Queue steering input. |
 | `GET` | `/sessions/{sessionId}/ws` | WebSocket subprotocol token | Open session WebSocket (see [websocket.md](websocket.md#authentication)). |
+
+## Media Input
+
+`POST /sessions/{sessionId}/messages` accepts `content` as a plain string or a
+parts array. Media is **inline base64 only** — there is no upload endpoint, no
+media resource object, and no URL fetching (design: parel-mono
+`docs/multimodal-media.md`).
+
+```jsonc
+{ "content": [
+    { "type": "text",  "text": "What color is this?" },
+    { "type": "image", "data": "<base64>", "mediaType": "image/png" },
+    { "type": "file",  "data": "<base64>", "mediaType": "application/pdf", "filename": "spec.pdf" }
+] }
+```
+
+Rules (violations return `400 media_invalid` / `413 media_too_large`):
+
+- Allowed media types: `image/png`, `image/jpeg`, `image/gif`, `image/webp`
+  (as `image` parts), `application/pdf` (as a `file` part). The declared
+  `mediaType` must match the content's magic bytes.
+- v1 budgets: ≤ 1 MiB raw per item, ≤ 3 media items per message, ≤ 1.25 MiB
+  raw total per message, ≤ 16 content parts per message, and the serialized
+  request row ≤ ~1.9 MB. Budgets may be raised in later runtime versions; the
+  error codes are stable.
+- While a turn is running, additional media-bearing messages are accepted only
+  while the pending input queue stays snapshot-safe; past that they return a
+  retryable `429` — resend after the current turn completes.
+- The WebSocket `message` frame accepts the same shape, bounded by the 1 MiB
+  WS frame limit — send larger payloads over HTTP.
+- Reads: `GET /sessions/{sessionId}/messages` returns media parts with full
+  `data`; the WS `sync` snapshot and derived query mirrors omit bytes and mark
+  those parts with `dataOmitted: true`.
+- Whether the model can see media depends on the session's model capabilities
+  (`vision`); on non-vision models media parts are projected to text
+  placeholders for that call only — the transcript is unchanged.
 
 ## Execution Snapshots
 

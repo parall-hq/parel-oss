@@ -148,6 +148,15 @@ export interface ImagePart extends MessagePartBase {
 	type: "image";
 	data: string;
 	mediaType: string;
+	/** Pixel dimensions, when known at intake (docs: multimodal-media). */
+	width?: number;
+	height?: number;
+	/**
+	 * True only on stripped read surfaces (WS sync snapshot, derived query
+	 * mirrors): bytes were omitted for transport bounds; the HTTP transcript
+	 * read carries full `data`. Never set on the model path.
+	 */
+	dataOmitted?: boolean;
 }
 
 export interface FilePart extends MessagePartBase {
@@ -155,6 +164,8 @@ export interface FilePart extends MessagePartBase {
 	data: string;
 	mediaType: string;
 	filename?: string;
+	/** See ImagePart.dataOmitted. */
+	dataOmitted?: boolean;
 }
 
 export interface ReasoningPart extends MessagePartBase {

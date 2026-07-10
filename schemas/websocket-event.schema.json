@@ -4,17 +4,39 @@
   "title": "PAREL WebSocket Event",
   "description": "Client and server events for the session WebSocket.",
   "oneOf": [
-    { "$ref": "#/$defs/clientMessage" },
-    { "$ref": "#/$defs/clientResume" },
-    { "$ref": "#/$defs/sync" },
-    { "$ref": "#/$defs/text" },
-    { "$ref": "#/$defs/reasoningStart" },
-    { "$ref": "#/$defs/reasoningDelta" },
-    { "$ref": "#/$defs/reasoningEnd" },
-    { "$ref": "#/$defs/toolCall" },
-    { "$ref": "#/$defs/toolResult" },
-    { "$ref": "#/$defs/turnEnd" },
-    { "$ref": "#/$defs/error" }
+    {
+      "$ref": "#/$defs/clientMessage"
+    },
+    {
+      "$ref": "#/$defs/clientResume"
+    },
+    {
+      "$ref": "#/$defs/sync"
+    },
+    {
+      "$ref": "#/$defs/text"
+    },
+    {
+      "$ref": "#/$defs/reasoningStart"
+    },
+    {
+      "$ref": "#/$defs/reasoningDelta"
+    },
+    {
+      "$ref": "#/$defs/reasoningEnd"
+    },
+    {
+      "$ref": "#/$defs/toolCall"
+    },
+    {
+      "$ref": "#/$defs/toolResult"
+    },
+    {
+      "$ref": "#/$defs/turnEnd"
+    },
+    {
+      "$ref": "#/$defs/error"
+    }
   ],
   "$defs": {
     "sessionState": {
@@ -32,101 +54,219 @@
         "updatedAt"
       ],
       "properties": {
-        "id": { "type": "string" },
-        "agentId": { "type": "string" },
-        "orgId": { "type": "string" },
+        "id": {
+          "type": "string"
+        },
+        "agentId": {
+          "type": "string"
+        },
+        "orgId": {
+          "type": "string"
+        },
         "status": {
           "type": "string",
-          "enum": ["initializing", "running", "ready", "suspended", "completed", "error", "timeout"]
+          "enum": [
+            "initializing",
+            "running",
+            "ready",
+            "suspended",
+            "completed",
+            "error",
+            "timeout"
+          ]
         },
-        "turnCount": { "type": "integer", "minimum": 0 },
-        "stepCount": { "type": "integer", "minimum": 0 },
-        "totalTokens": { "type": "number", "minimum": 0 },
-        "totalCostUsd": { "type": "number", "minimum": 0 },
-        "createdAt": { "type": "number" },
-        "updatedAt": { "type": "number" }
+        "turnCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stepCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "totalTokens": {
+          "type": "number",
+          "minimum": 0
+        },
+        "totalCostUsd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "createdAt": {
+          "type": "number"
+        },
+        "updatedAt": {
+          "type": "number"
+        }
       },
       "additionalProperties": true
     },
     "clientMessage": {
       "type": "object",
-      "required": ["type", "content"],
+      "required": [
+        "type",
+        "content"
+      ],
       "properties": {
-        "type": { "const": "message" },
-        "content": { "type": "string" }
+        "type": {
+          "const": "message"
+        },
+        "content": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/inboundTextPart"
+                  },
+                  {
+                    "$ref": "#/$defs/inboundImagePart"
+                  },
+                  {
+                    "$ref": "#/$defs/inboundFilePart"
+                  }
+                ]
+              }
+            }
+          ]
+        }
       },
       "additionalProperties": false
     },
     "clientResume": {
       "type": "object",
       "description": "Client request to replay the current transcript after a (re)connect.",
-      "required": ["type"],
+      "required": [
+        "type"
+      ],
       "properties": {
-        "type": { "const": "resume" },
-        "since_seq": { "type": "integer", "minimum": 0 }
+        "type": {
+          "const": "resume"
+        },
+        "since_seq": {
+          "type": "integer",
+          "minimum": 0
+        }
       },
       "additionalProperties": false
     },
     "sync": {
       "type": "object",
-      "description": "Server transcript replay, emitted on connect and on resume.",
-      "required": ["type", "state", "messages", "eventSeq", "running"],
+      "description": "Server transcript replay, emitted on connect and on resume. Media parts are delivered WITHOUT bytes on this surface (data: \"\" plus dataOmitted: true) to respect the transport frame bound; fetch GET /sessions/{id}/messages for full data.",
+      "required": [
+        "type",
+        "state",
+        "messages",
+        "eventSeq",
+        "running"
+      ],
       "properties": {
-        "type": { "const": "sync" },
-        "state": { "$ref": "#/$defs/sessionState" },
+        "type": {
+          "const": "sync"
+        },
+        "state": {
+          "$ref": "#/$defs/sessionState"
+        },
         "messages": {
           "type": "array",
-          "items": { "type": "object", "additionalProperties": true }
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
         },
-        "eventSeq": { "type": "integer", "minimum": 0 },
-        "running": { "type": "boolean" }
+        "eventSeq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "running": {
+          "type": "boolean"
+        }
       },
       "additionalProperties": false
     },
     "text": {
       "type": "object",
-      "required": ["type", "text"],
+      "required": [
+        "type",
+        "text"
+      ],
       "properties": {
-        "type": { "const": "text" },
-        "text": { "type": "string" }
+        "type": {
+          "const": "text"
+        },
+        "text": {
+          "type": "string"
+        }
       },
       "additionalProperties": false
     },
     "reasoningStart": {
       "type": "object",
-      "required": ["type"],
+      "required": [
+        "type"
+      ],
       "properties": {
-        "type": { "const": "reasoning_start" },
+        "type": {
+          "const": "reasoning_start"
+        },
         "visibility": {
           "type": "string",
-          "enum": ["chat", "trace", "hidden"]
+          "enum": [
+            "chat",
+            "trace",
+            "hidden"
+          ]
         }
       },
       "additionalProperties": false
     },
     "reasoningDelta": {
       "type": "object",
-      "required": ["type", "text"],
+      "required": [
+        "type",
+        "text"
+      ],
       "properties": {
-        "type": { "const": "reasoning_delta" },
-        "text": { "type": "string" }
+        "type": {
+          "const": "reasoning_delta"
+        },
+        "text": {
+          "type": "string"
+        }
       },
       "additionalProperties": false
     },
     "reasoningEnd": {
       "type": "object",
-      "required": ["type"],
+      "required": [
+        "type"
+      ],
       "properties": {
-        "type": { "const": "reasoning_end" }
+        "type": {
+          "const": "reasoning_end"
+        }
       },
       "additionalProperties": false
     },
     "toolCall": {
       "type": "object",
-      "required": ["type", "name", "arguments"],
+      "required": [
+        "type",
+        "name",
+        "arguments"
+      ],
       "properties": {
-        "type": { "const": "tool_call" },
-        "name": { "type": "string" },
+        "type": {
+          "const": "tool_call"
+        },
+        "name": {
+          "type": "string"
+        },
         "arguments": {
           "type": "object",
           "additionalProperties": true
@@ -136,33 +276,127 @@
     },
     "toolResult": {
       "type": "object",
-      "required": ["type", "name", "content", "isError"],
+      "required": [
+        "type",
+        "name",
+        "content",
+        "isError"
+      ],
       "properties": {
-        "type": { "const": "tool_result" },
-        "name": { "type": "string" },
-        "content": { "type": "string" },
-        "isError": { "type": "boolean" }
+        "type": {
+          "const": "tool_result"
+        },
+        "name": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "isError": {
+          "type": "boolean"
+        }
       },
       "additionalProperties": false
     },
     "turnEnd": {
       "type": "object",
-      "required": ["type", "state"],
+      "required": [
+        "type",
+        "state"
+      ],
       "properties": {
-        "type": { "const": "turn_end" },
-        "state": { "$ref": "#/$defs/sessionState" }
+        "type": {
+          "const": "turn_end"
+        },
+        "state": {
+          "$ref": "#/$defs/sessionState"
+        }
       },
       "additionalProperties": false
     },
     "error": {
       "type": "object",
-      "required": ["type", "error"],
+      "required": [
+        "type",
+        "error"
+      ],
       "properties": {
-        "type": { "const": "error" },
-        "error": { "type": "string" }
+        "type": {
+          "const": "error"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "inboundTextPart": {
+      "type": "object",
+      "required": [
+        "type",
+        "text"
+      ],
+      "properties": {
+        "type": {
+          "const": "text"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "inboundImagePart": {
+      "type": "object",
+      "description": "Inline base64 image. Subject to the documented per-item/per-message size budgets; declared mediaType must match the content's magic bytes.",
+      "required": [
+        "type",
+        "data",
+        "mediaType"
+      ],
+      "properties": {
+        "type": {
+          "const": "image"
+        },
+        "data": {
+          "type": "string",
+          "description": "base64 (no data: prefix)"
+        },
+        "mediaType": {
+          "enum": [
+            "image/png",
+            "image/jpeg",
+            "image/gif",
+            "image/webp"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "inboundFilePart": {
+      "type": "object",
+      "description": "Inline base64 document (PDF). Subject to the documented size budgets.",
+      "required": [
+        "type",
+        "data",
+        "mediaType"
+      ],
+      "properties": {
+        "type": {
+          "const": "file"
+        },
+        "data": {
+          "type": "string",
+          "description": "base64 (no data: prefix)"
+        },
+        "mediaType": {
+          "const": "application/pdf"
+        },
+        "filename": {
+          "type": "string"
+        }
       },
       "additionalProperties": false
     }
   }
 }
-

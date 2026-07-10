@@ -4,75 +4,149 @@
   "title": "PAREL Message",
   "description": "Provider-neutral transcript message and message part schema.",
   "type": "object",
-  "required": ["role", "parts"],
+  "required": [
+    "role",
+    "parts"
+  ],
   "properties": {
-    "id": { "type": "string" },
-    "sessionId": { "type": "string" },
-    "turnId": { "type": "string" },
-    "seq": { "type": "integer", "minimum": 0 },
+    "id": {
+      "type": "string"
+    },
+    "sessionId": {
+      "type": "string"
+    },
+    "turnId": {
+      "type": "string"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0
+    },
     "role": {
       "type": "string",
-      "enum": ["system", "user", "assistant", "tool"]
+      "enum": [
+        "system",
+        "user",
+        "assistant",
+        "tool"
+      ]
     },
     "parts": {
       "type": "array",
-      "items": { "$ref": "#/$defs/messagePart" }
+      "items": {
+        "$ref": "#/$defs/messagePart"
+      }
     },
-    "provider": { "type": "string" },
-    "model": { "type": "string" },
+    "provider": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
     "status": {
       "type": "string",
-      "enum": ["streaming", "completed", "error"]
+      "enum": [
+        "streaming",
+        "completed",
+        "error"
+      ]
     },
-    "createdAt": { "type": "string" }
+    "createdAt": {
+      "type": "string"
+    }
   },
   "additionalProperties": false,
   "$defs": {
     "visibility": {
       "type": "string",
-      "enum": ["chat", "trace", "hidden"]
+      "enum": [
+        "chat",
+        "trace",
+        "hidden"
+      ]
     },
     "providerReplayScope": {
       "type": "string",
-      "enum": ["same_provider", "same_provider_model", "never"]
+      "enum": [
+        "same_provider",
+        "same_provider_model",
+        "never"
+      ]
     },
     "providerArtifact": {
       "type": "object",
-      "required": ["provider", "artifactType", "replayScope", "requiredForReplay", "payload"],
+      "required": [
+        "provider",
+        "artifactType",
+        "replayScope",
+        "requiredForReplay",
+        "payload"
+      ],
       "properties": {
-        "id": { "type": "string" },
-        "provider": { "type": "string" },
-        "artifactType": { "type": "string" },
-        "replayScope": { "$ref": "#/$defs/providerReplayScope" },
-        "requiredForReplay": { "type": "boolean" },
+        "id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "artifactType": {
+          "type": "string"
+        },
+        "replayScope": {
+          "$ref": "#/$defs/providerReplayScope"
+        },
+        "requiredForReplay": {
+          "type": "boolean"
+        },
         "payload": true,
-        "payloadHash": { "type": "string" }
+        "payloadHash": {
+          "type": "string"
+        }
       },
       "additionalProperties": false
     },
     "partBase": {
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "visibility": { "$ref": "#/$defs/visibility" },
-        "provider": { "type": "string" },
-        "model": { "type": "string" },
+        "id": {
+          "type": "string"
+        },
+        "visibility": {
+          "$ref": "#/$defs/visibility"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
         "providerArtifacts": {
           "type": "array",
-          "items": { "$ref": "#/$defs/providerArtifact" }
+          "items": {
+            "$ref": "#/$defs/providerArtifact"
+          }
         }
       }
     },
     "textPart": {
       "type": "object",
       "allOf": [
-        { "$ref": "#/$defs/partBase" },
+        {
+          "$ref": "#/$defs/partBase"
+        },
         {
           "type": "object",
-          "required": ["type", "text"],
+          "required": [
+            "type",
+            "text"
+          ],
           "properties": {
-            "type": { "const": "text" },
-            "text": { "type": "string" }
+            "type": {
+              "const": "text"
+            },
+            "text": {
+              "type": "string"
+            }
           }
         }
       ],
@@ -81,14 +155,38 @@
     "imagePart": {
       "type": "object",
       "allOf": [
-        { "$ref": "#/$defs/partBase" },
+        {
+          "$ref": "#/$defs/partBase"
+        },
         {
           "type": "object",
-          "required": ["type", "data", "mediaType"],
+          "required": [
+            "type",
+            "data",
+            "mediaType"
+          ],
           "properties": {
-            "type": { "const": "image" },
-            "data": { "type": "string" },
-            "mediaType": { "type": "string" }
+            "type": {
+              "const": "image"
+            },
+            "data": {
+              "type": "string"
+            },
+            "mediaType": {
+              "type": "string"
+            },
+            "width": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "height": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "dataOmitted": {
+              "type": "boolean",
+              "description": "Present (true) only on stripped read surfaces (WS sync, D1 mirror): bytes were omitted for transport bounds; the HTTP transcript read carries full data."
+            }
           }
         }
       ],
@@ -97,15 +195,33 @@
     "filePart": {
       "type": "object",
       "allOf": [
-        { "$ref": "#/$defs/partBase" },
+        {
+          "$ref": "#/$defs/partBase"
+        },
         {
           "type": "object",
-          "required": ["type", "data", "mediaType"],
+          "required": [
+            "type",
+            "data",
+            "mediaType"
+          ],
           "properties": {
-            "type": { "const": "file" },
-            "data": { "type": "string" },
-            "mediaType": { "type": "string" },
-            "filename": { "type": "string" }
+            "type": {
+              "const": "file"
+            },
+            "data": {
+              "type": "string"
+            },
+            "mediaType": {
+              "type": "string"
+            },
+            "filename": {
+              "type": "string"
+            },
+            "dataOmitted": {
+              "type": "boolean",
+              "description": "Present (true) only on stripped read surfaces (WS sync, D1 mirror): bytes were omitted for transport bounds; the HTTP transcript read carries full data."
+            }
           }
         }
       ],
@@ -114,14 +230,24 @@
     "reasoningPart": {
       "type": "object",
       "allOf": [
-        { "$ref": "#/$defs/partBase" },
+        {
+          "$ref": "#/$defs/partBase"
+        },
         {
           "type": "object",
-          "required": ["type"],
+          "required": [
+            "type"
+          ],
           "properties": {
-            "type": { "const": "reasoning" },
-            "text": { "type": "string" },
-            "summary": { "type": "string" }
+            "type": {
+              "const": "reasoning"
+            },
+            "text": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            }
           }
         }
       ],
@@ -129,10 +255,18 @@
     },
     "toolCall": {
       "type": "object",
-      "required": ["id", "name", "arguments"],
+      "required": [
+        "id",
+        "name",
+        "arguments"
+      ],
       "properties": {
-        "id": { "type": "string" },
-        "name": { "type": "string" },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
         "arguments": {
           "type": "object",
           "additionalProperties": true
@@ -143,13 +277,22 @@
     "toolCallPart": {
       "type": "object",
       "allOf": [
-        { "$ref": "#/$defs/partBase" },
+        {
+          "$ref": "#/$defs/partBase"
+        },
         {
           "type": "object",
-          "required": ["type", "toolCall"],
+          "required": [
+            "type",
+            "toolCall"
+          ],
           "properties": {
-            "type": { "const": "tool_call" },
-            "toolCall": { "$ref": "#/$defs/toolCall" }
+            "type": {
+              "const": "tool_call"
+            },
+            "toolCall": {
+              "$ref": "#/$defs/toolCall"
+            }
           }
         }
       ],
@@ -158,15 +301,29 @@
     "toolResultPart": {
       "type": "object",
       "allOf": [
-        { "$ref": "#/$defs/partBase" },
+        {
+          "$ref": "#/$defs/partBase"
+        },
         {
           "type": "object",
-          "required": ["type", "toolCallId", "content"],
+          "required": [
+            "type",
+            "toolCallId",
+            "content"
+          ],
           "properties": {
-            "type": { "const": "tool_result" },
-            "toolCallId": { "type": "string" },
-            "content": { "type": "string" },
-            "isError": { "type": "boolean" }
+            "type": {
+              "const": "tool_result"
+            },
+            "toolCallId": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            },
+            "isError": {
+              "type": "boolean"
+            }
           }
         }
       ],
@@ -175,13 +332,23 @@
     "sourcePart": {
       "type": "object",
       "allOf": [
-        { "$ref": "#/$defs/partBase" },
+        {
+          "$ref": "#/$defs/partBase"
+        },
         {
           "type": "object",
-          "required": ["type", "sourceType", "payload"],
+          "required": [
+            "type",
+            "sourceType",
+            "payload"
+          ],
           "properties": {
-            "type": { "const": "source" },
-            "sourceType": { "type": "string" },
+            "type": {
+              "const": "source"
+            },
+            "sourceType": {
+              "type": "string"
+            },
             "payload": true
           }
         }
@@ -190,13 +357,27 @@
     },
     "messagePart": {
       "oneOf": [
-        { "$ref": "#/$defs/textPart" },
-        { "$ref": "#/$defs/imagePart" },
-        { "$ref": "#/$defs/filePart" },
-        { "$ref": "#/$defs/reasoningPart" },
-        { "$ref": "#/$defs/toolCallPart" },
-        { "$ref": "#/$defs/toolResultPart" },
-        { "$ref": "#/$defs/sourcePart" }
+        {
+          "$ref": "#/$defs/textPart"
+        },
+        {
+          "$ref": "#/$defs/imagePart"
+        },
+        {
+          "$ref": "#/$defs/filePart"
+        },
+        {
+          "$ref": "#/$defs/reasoningPart"
+        },
+        {
+          "$ref": "#/$defs/toolCallPart"
+        },
+        {
+          "$ref": "#/$defs/toolResultPart"
+        },
+        {
+          "$ref": "#/$defs/sourcePart"
+        }
       ]
     }
   }
