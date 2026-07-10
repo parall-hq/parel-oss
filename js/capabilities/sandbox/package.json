@@ -1,6 +1,6 @@
 {
   "name": "@parel/capability-sandbox",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Provider-neutral PAREL sandbox capability contract.",
   "license": "MIT",
   "repository": {

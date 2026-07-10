@@ -1,5 +1,12 @@
 # @parel/coding-agent
 
+## 0.1.13
+
+### Patch Changes
+
+- Updated dependencies [c52c48d]
+  - @parel/plugin-sdk@0.11.0
+
 ## 0.1.12
 
 ### Patch Changes

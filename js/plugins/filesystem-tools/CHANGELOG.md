@@ -1,5 +1,17 @@
 # @parel/filesystem-tools
 
+## 0.2.0
+
+### Minor Changes
+
+- c52c48d: Tool-result media (multimodal tool-result leg): tools can return inline base64 media via `ToolOutput.media`; it flows to `ToolResult.media` (hooks) and `ToolResultPart.media` (transcript), rendered natively by providers that support media in tool results. `ModelCapabilities.documents` declares PDF input support. `SandboxFilesystemView.readFile` forwards `SandboxReadFileOptions` (e2b implements binary-safe base64 reads); `workspace_read_file` returns image files (png/jpg/gif/webp, ≤1MiB) as attached media with magic-byte self-checks.
+
+### Patch Changes
+
+- Updated dependencies [c52c48d]
+  - @parel/plugin-sdk@0.11.0
+  - @parel/workspace@0.2.1
+
 ## 0.1.12
 
 ### Patch Changes

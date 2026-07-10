@@ -1,5 +1,13 @@
 # @parel/process-tools
 
+## 0.1.13
+
+### Patch Changes
+
+- Updated dependencies [c52c48d]
+  - @parel/plugin-sdk@0.11.0
+  - @parel/workspace@0.2.1
+
 ## 0.1.12
 
 ### Patch Changes
