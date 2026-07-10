@@ -1,5 +1,12 @@
 # @parel/core
 
+## 0.15.0
+
+### Minor Changes
+
+- c705c9d: Additive media-part contract fields for the multimodal input path: `ImagePart.width`/`ImagePart.height` (pixel dimensions when known at intake) and `dataOmitted` on `ImagePart`/`FilePart` — set only on stripped read surfaces (WS sync snapshot, derived query mirrors) where bytes are omitted for transport bounds; the HTTP transcript read keeps full `data`. See the runtime's multimodal-media design doc.
+- c52c48d: Tool-result media (multimodal tool-result leg): tools can return inline base64 media via `ToolOutput.media`; it flows to `ToolResult.media` (hooks) and `ToolResultPart.media` (transcript), rendered natively by providers that support media in tool results. `ModelCapabilities.documents` declares PDF input support. `SandboxFilesystemView.readFile` forwards `SandboxReadFileOptions` (e2b implements binary-safe base64 reads); `workspace_read_file` returns image files (png/jpg/gif/webp, ≤1MiB) as attached media with magic-byte self-checks.
+
 ## 0.14.0
 
 ### Minor Changes
