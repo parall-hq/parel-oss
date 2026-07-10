@@ -2,7 +2,10 @@ import { definePlugin, type ToolOutput } from "@parel/plugin-sdk";
 import { WORKSPACE_CAPABILITY, type WorkspaceCapability } from "@parel/workspace";
 
 export interface FilesystemCapability {
-	readFile(path: string): Promise<string>;
+	readFile(
+		path: string,
+		opts?: { encoding?: "utf8" | "base64"; maxChars?: number },
+	): Promise<string>;
 	writeFile(path: string, content: string): Promise<void>;
 	exists?(path: string): Promise<boolean>;
 	listDir(path: string): Promise<string[]>;
@@ -29,6 +32,54 @@ interface ListDirParams {
 }
 
 const DEFAULT_MAX_READ_BYTES = 64 * 1024;
+// Image reads are returned as inline media on the tool result (multimodal-media
+// tool-result leg): raw-size cap mirrors the platform's per-item media budget.
+const MAX_IMAGE_READ_BYTES = 1_048_576; // 1 MiB raw
+const IMAGE_MEDIA_TYPES: Record<string, string> = {
+	png: "image/png",
+	jpg: "image/jpeg",
+	jpeg: "image/jpeg",
+	gif: "image/gif",
+	webp: "image/webp",
+};
+
+// Magic-byte signatures for self-checking the provider's base64 output: a
+// sandbox whose filesystem view ignores `encoding` would hand back mangled
+// UTF-8 — better a clear tool error than silently feeding garbage to the model.
+const IMAGE_MAGIC: Record<string, number[]> = {
+	"image/png": [0x89, 0x50, 0x4e, 0x47],
+	"image/jpeg": [0xff, 0xd8, 0xff],
+	"image/gif": [0x47, 0x49, 0x46, 0x38],
+	"image/webp": [0x52, 0x49, 0x46, 0x46],
+};
+
+function base64RawBytes(data: string): number {
+	const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+	return Math.floor((data.length * 3) / 4) - padding;
+}
+
+// Minimal base64 head decoder (platform-neutral: no atob/Buffer dependency).
+const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+function decodeBase64Head(data: string, byteCount: number): number[] | null {
+	const out: number[] = [];
+	for (let i = 0; i + 3 < data.length && out.length < byteCount; i += 4) {
+		const n = [0, 1, 2, 3].map((k) => B64.indexOf(data[i + k] ?? "="));
+		if (n[0] < 0 || n[1] < 0) return null;
+		out.push((n[0] << 2) | (n[1] >> 4));
+		if (n[2] >= 0) out.push(((n[1] & 15) << 4) | (n[2] >> 2));
+		if (n[2] >= 0 && n[3] >= 0) out.push(((n[2] & 3) << 6) | n[3]);
+	}
+	return out.slice(0, byteCount);
+}
+
+function matchesImageMagic(data: string, mediaType: string): boolean {
+	const sig = IMAGE_MAGIC[mediaType];
+	if (!sig) return false;
+	const head = decodeBase64Head(data, sig.length);
+	if (!head || head.length < sig.length) return false;
+	return sig.every((byte, i) => head[i] === byte);
+}
 
 function byteLength(text: string): number {
 	let bytes = 0;
@@ -115,7 +166,8 @@ export default definePlugin({
 		ctx.tool(
 			{
 				name: "workspace_read_file",
-				description: "Read a UTF-8 text file using a workspace-relative path.",
+				description:
+					"Read a file using a workspace-relative path. Text files return their contents; image files (png/jpg/gif/webp) are attached so you can see them.",
 				parameters: {
 					type: "object",
 					properties: {
@@ -130,6 +182,32 @@ export default definePlugin({
 			},
 			async (params: ReadFileParams): Promise<ToolOutput> => {
 				const { relative, absolute } = await resolvePath(params.path);
+				// Image files come back as inline media on the tool result so a
+				// vision-capable model can SEE them (multimodal-media tool-result leg).
+				const ext = relative.split(".").pop()?.toLowerCase() ?? "";
+				const imageMediaType = IMAGE_MEDIA_TYPES[ext];
+				if (imageMediaType) {
+					const data = await filesystem.readFile(absolute, { encoding: "base64" });
+					const rawBytes = base64RawBytes(data);
+					if (rawBytes > MAX_IMAGE_READ_BYTES) {
+						return {
+							content: `Error: image is ${rawBytes} bytes; the inline media limit is ${MAX_IMAGE_READ_BYTES} bytes`,
+							isError: true,
+						};
+					}
+					if (!matchesImageMagic(data, imageMediaType)) {
+						return {
+							content:
+								"Error: could not read the file as binary — the sandbox provider may not support base64 reads, or the file is not a valid image",
+							isError: true,
+						};
+					}
+					return {
+						content: `[image: ${imageMediaType}, ${rawBytes} bytes — attached]`,
+						media: [{ data, mediaType: imageMediaType }],
+						refs: [{ type: "workspace_path", path: relative, mediaType: imageMediaType }],
+					};
+				}
 				const raw = await filesystem.readFile(absolute);
 				const sliced = sliceLines(
 					raw,

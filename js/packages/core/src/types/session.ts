@@ -188,6 +188,13 @@ export interface ToolResultPart extends MessagePartBase {
 	fullContentRef?: ToolContentRef;
 	truncated?: boolean;
 	originalByteLength?: number;
+	/**
+	 * Media produced by the tool (inline base64, classified by mediaType into
+	 * image/file parts by the runtime). Rendered natively by providers that
+	 * support media in tool results; projected otherwise. Not counted against
+	 * the text truncation budget. Design: multimodal-media (tool-result leg).
+	 */
+	media?: (ImagePart | FilePart)[];
 }
 
 export interface SourcePart extends MessagePartBase {
@@ -251,6 +258,7 @@ export interface ToolResult {
 	fullContentRef?: ToolContentRef;
 	truncated?: boolean;
 	originalByteLength?: number;
+	media?: ToolMediaOutput[];
 }
 
 export interface InputQueueItem {
@@ -297,6 +305,15 @@ export type ToolContentRef =
 	| { type: "workspace_path"; path: string; mediaType?: string; metadata?: Record<string, unknown> }
 	| { type: "sandbox_path"; path: string; mediaType?: string; metadata?: Record<string, unknown> };
 
+/** Inline media returned by a tool (base64 bytes + declared media type). */
+export interface ToolMediaOutput {
+	data: string;
+	mediaType: string;
+	filename?: string;
+	width?: number;
+	height?: number;
+}
+
 export interface ToolOutput {
 	content: string;
 	isError?: boolean;
@@ -304,6 +321,12 @@ export interface ToolOutput {
 	fullContentRef?: ToolContentRef;
 	truncated?: boolean;
 	originalByteLength?: number;
+	/**
+	 * Inline media accompanying the textual result. Budgeted separately from
+	 * the text truncation cap; oversized or over-count items are dropped with
+	 * a textual note by the runtime. Design: multimodal-media (tool-result leg).
+	 */
+	media?: ToolMediaOutput[];
 }
 
 export type ToolHandlerReturn = string | ToolOutput;
@@ -484,6 +507,8 @@ export interface ModelCapabilities {
 	parallelToolCalls: boolean;
 	streaming: boolean;
 	vision: boolean;
+	/** Document (PDF) input support on the input path. */
+	documents?: boolean;
 	thinking: boolean;
 	promptCache?: PromptCacheCapabilities;
 	pricing?: ModelPricing;
