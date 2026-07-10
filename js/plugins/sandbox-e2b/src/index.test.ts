@@ -1029,3 +1029,81 @@ describe("@parel/sandbox-e2b", () => {
 		});
 	});
 });
+
+describe("config.env as the per-command base (resume safety)", () => {
+	// E2B cold-start envs are injected only at CREATE; a persistent sandbox
+	// resumed from a pause has a fresh process environment. Every command
+	// surface must therefore carry config.env explicitly.
+
+	it("bash carries config.env even without an invocation context", async () => {
+		const sandbox = makeSandbox();
+		sandbox.commands.run.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "" });
+		sandboxMock.create.mockResolvedValue(sandbox);
+		const h = makeHarness({
+			apiKey: "test-key",
+			env: { BASE_TOKEN: "static", API_ROOT: "https://x" },
+		});
+		await sandboxE2bPlugin.setup(h.ctx);
+		await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+		await h.tools.get("bash")?.({ command: "env" }, toolCtx);
+
+		expect(sandbox.commands.run).toHaveBeenCalledWith("env", {
+			envs: { BASE_TOKEN: "static", API_ROOT: "https://x" },
+		});
+	});
+
+	it("bash without config.env and without context stays env-less (no behavior change)", async () => {
+		const sandbox = makeSandbox();
+		sandbox.commands.run.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "" });
+		sandboxMock.create.mockResolvedValue(sandbox);
+		const h = makeHarness();
+		await sandboxE2bPlugin.setup(h.ctx);
+		await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+		await h.tools.get("bash")?.({ command: "env" }, toolCtx);
+
+		expect(sandbox.commands.run).toHaveBeenCalledWith("env");
+	});
+
+	it("exec-capability shell commands carry the config.env base", async () => {
+		const sandbox = makeSandbox();
+		sandbox.commands.run.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "" });
+		sandboxMock.create.mockResolvedValue(sandbox);
+		const h = makeHarness({ apiKey: "test-key", env: { BASE_TOKEN: "static" } });
+		await sandboxE2bPlugin.setup(h.ctx);
+		await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+		const exec = h.provided.get("exec") as {
+			run(cmd: string): Promise<string>;
+		};
+		await exec.run("echo hi");
+
+		expect(sandbox.commands.run).toHaveBeenCalledWith("echo hi", {
+			envs: { BASE_TOKEN: "static" },
+		});
+	});
+
+	it("background processes merge config.env under caller envs", async () => {
+		const sandbox = makeSandbox();
+		sandbox.commands.run.mockResolvedValue({
+			pid: 42,
+			disconnect: vi.fn().mockResolvedValue(undefined),
+		});
+		sandboxMock.create.mockResolvedValue(sandbox);
+		const h = makeHarness({ apiKey: "test-key", env: { BASE_TOKEN: "static", SHARED: "base" } });
+		await sandboxE2bPlugin.setup(h.ctx);
+		await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+		const processes = h.provided.get("process") as SandboxProcessCapability;
+		await processes.start("sleep 100", { envs: { SHARED: "override" } });
+
+		expect(sandbox.commands.run).toHaveBeenCalledWith(
+			expect.stringContaining("sleep 100"),
+			expect.objectContaining({
+				background: true,
+				envs: { BASE_TOKEN: "static", SHARED: "override" },
+			}),
+		);
+	});
+});
