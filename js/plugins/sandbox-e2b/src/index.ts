@@ -693,6 +693,14 @@ export default definePlugin({
 			fs: {
 				async readFile(path, opts) {
 					const s = await ensureSandbox();
+					if (opts?.encoding === "base64") {
+						// Binary-safe read: bytes → base64 (maxChars bounds the encoded string).
+						const bytes = await s.files.read(path, { format: "bytes" });
+						const encoded = Buffer.from(bytes).toString("base64");
+						if (opts?.maxChars && encoded.length > opts.maxChars)
+							return encoded.slice(0, opts.maxChars);
+						return encoded;
+					}
 					const content = await s.files.read(path);
 					if (opts?.maxChars && content.length > opts.maxChars)
 						return content.slice(0, opts.maxChars);

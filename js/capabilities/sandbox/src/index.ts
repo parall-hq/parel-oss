@@ -147,7 +147,7 @@ export interface SandboxCapability {
 // surface by calling it once after assembling its capability.
 
 export interface SandboxFilesystemView {
-	readFile(path: string): Promise<string>;
+	readFile(path: string, opts?: SandboxReadFileOptions): Promise<string>;
 	writeFile(path: string, content: string): Promise<void>;
 	exists(path: string): Promise<boolean>;
 	listDir(path: string): Promise<string[]>;
@@ -255,8 +255,8 @@ export function createSandboxCapabilityViews(
 	};
 
 	const filesystem: SandboxFilesystemView = {
-		async readFile(path) {
-			return requireFs().readFile(path);
+		async readFile(path, opts) {
+			return requireFs().readFile(path, opts);
 		},
 		async writeFile(path, content) {
 			await requireFs().writeFile(path, content);
