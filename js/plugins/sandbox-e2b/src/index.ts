@@ -635,10 +635,17 @@ export default definePlugin({
 			async run(command: string, invocation?: InvocationContext): Promise<string> {
 				const s = await ensureSandbox();
 				const turnEnv = invocationEnv(invocation);
-				// E2B per-command `envs` shadow the sandbox's cold-start envs, so merge the
-				// configured sandbox env (`config.env`) underneath the per-turn values — the
-				// per-turn invocation context wins on key conflicts.
-				const commandEnv = turnEnv ? { ...envs, ...turnEnv } : undefined;
+				// `config.env` is the BASE environment of every command, not just a
+				// cold-start artifact: E2B injects cold-start envs only when the sandbox
+				// is CREATED, and a persistent sandbox resumed from a pause comes back
+				// with a fresh process environment — a command relying on the
+				// sandbox-level envs alone silently loses them after any resume. Merge
+				// the base under the per-turn values unconditionally; the per-turn
+				// invocation context wins on key conflicts. (Regression guard: turns
+				// without an invocation context previously ran with NO env at all on a
+				// resumed sandbox.)
+				const commandEnv =
+					Object.keys(envs).length > 0 || turnEnv ? { ...envs, ...(turnEnv ?? {}) } : undefined;
 				const result = await runToResult(
 					commandEnv ? s.commands.run(command, { envs: commandEnv }) : s.commands.run(command),
 				);
@@ -654,7 +661,14 @@ export default definePlugin({
 			opts?: SandboxExecOptions | SandboxShellOptions,
 		): Promise<SandboxProcessResult> {
 			const s = await ensureSandbox();
-			const result = await runToResult(s.commands.run(applyShellOptions(command, opts)));
+			// Same resume caveat as the bash tool: carry `config.env` as the
+			// per-command base. The caller's opts.env rides the shell prefix built by
+			// applyShellOptions, which naturally overrides the process environment.
+			const result = await runToResult(
+				Object.keys(envs).length > 0
+					? s.commands.run(applyShellOptions(command, opts), { envs })
+					: s.commands.run(applyShellOptions(command, opts)),
+			);
 			return {
 				stdout: limitOutput(result.stdout, opts?.maxOutputChars),
 				stderr: limitOutput(result.stderr, opts?.maxOutputChars),
@@ -729,10 +743,13 @@ export default definePlugin({
 				const dir = processLogDir(id);
 				const stdoutPath = `${dir}/stdout.log`;
 				const stderrPath = `${dir}/stderr.log`;
+				// Background processes outlive turns and are the most exposed to the
+				// resume caveat — always carry the config.env base under caller envs.
+				const startEnvs = { ...envs, ...(opts.envs ?? {}) };
 				const handle = await s.commands.run(backgroundCommand(command, stdoutPath, stderrPath), {
 					background: true,
 					...(opts.cwd ? { cwd: opts.cwd } : {}),
-					...(opts.envs ? { envs: opts.envs } : {}),
+					...(Object.keys(startEnvs).length > 0 ? { envs: startEnvs } : {}),
 					...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
 				});
 				const record: SandboxProcessHandle = {
