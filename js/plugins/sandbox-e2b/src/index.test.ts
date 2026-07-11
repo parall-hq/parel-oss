@@ -132,7 +132,12 @@ function makeSandbox() {
 	const commandRun = vi.fn();
 	const commandList = vi.fn().mockResolvedValue([{ pid: 42 }]);
 	const commandKill = vi.fn().mockResolvedValue(true);
-	const filesRead = vi.fn().mockResolvedValue("file contents");
+	// Mirrors the real e2b SDK: default text read; {format:"bytes"} → Uint8Array.
+	const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+	const filesRead = vi.fn().mockImplementation((_path: string, opts?: { format?: string }) => {
+		if (opts?.format === "bytes") return Promise.resolve(PNG_BYTES);
+		return Promise.resolve("file contents");
+	});
 	const filesWrite = vi.fn().mockResolvedValue(undefined);
 	const filesList = vi.fn().mockResolvedValue([{ name: "a.txt" }, { name: "b.txt" }]);
 	return {
@@ -293,6 +298,31 @@ describe("@parel/sandbox-e2b", () => {
 			{ name: "a.txt", path: undefined, type: "unknown" },
 			{ name: "b.txt", path: undefined, type: "unknown" },
 		]);
+	});
+
+	it("legacy 'filesystem' view honors base64 reads (filesystem-tools image path)", async () => {
+		// Regression: the hand-rolled legacy view used to drop the options
+		// argument, silently returning mangled UTF-8 for base64 requests — the
+		// exact combination filesystem-tools' workspace_read_file image branch
+		// depends on (its magic-byte self-check then rejected every image).
+		const sandbox = makeSandbox();
+		sandboxMock.create.mockResolvedValue(sandbox);
+		const h = makeHarness();
+		await sandboxE2bPlugin.setup(h.ctx);
+		await h.hooks.get(LifecycleEvent.SessionStart)?.();
+		const filesystem = h.provided.get("filesystem") as {
+			readFile(path: string, opts?: { encoding?: string; maxChars?: number }): Promise<string>;
+		};
+		const encoded = await filesystem.readFile("/workspace/square.png", { encoding: "base64" });
+		// Decodes back to the exact bytes — magic-byte intact (the tool's
+		// self-check equivalence condition).
+		const decoded = Buffer.from(encoded, "base64");
+		expect([...decoded.subarray(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+		expect(sandbox.files.read).toHaveBeenCalledWith("/workspace/square.png", {
+			format: "bytes",
+		});
+		// Text reads stay on the default path.
+		await expect(filesystem.readFile("/workspace/a.txt")).resolves.toBe("file contents");
 	});
 
 	it("provides process and ports capabilities backed by the E2B sandbox", async () => {

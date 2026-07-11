@@ -597,10 +597,29 @@ export default definePlugin({
 
 		// --- Capabilities ---
 
+		// NOTE: hand-rolled legacy views (every other sandbox provider derives
+		// these via createSandboxCapabilityViews) — any option added to the view
+		// contract must be mirrored here or it is silently dropped, which is
+		// exactly how the base64 image-read path broke. Migration to the shared
+		// helper is tracked as a follow-up.
 		const filesystem = {
-			async readFile(path: string): Promise<string> {
+			async readFile(
+				path: string,
+				opts?: { encoding?: "utf8" | "base64"; maxChars?: number },
+			): Promise<string> {
 				const s = await ensureSandbox();
-				return s.files.read(path);
+				if (opts?.encoding === "base64") {
+					// Binary-safe read: bytes → base64 (maxChars bounds the encoded string).
+					const bytes = await s.files.read(path, { format: "bytes" });
+					const encoded = Buffer.from(bytes).toString("base64");
+					return opts?.maxChars && encoded.length > opts.maxChars
+						? encoded.slice(0, opts.maxChars)
+						: encoded;
+				}
+				const content = await s.files.read(path);
+				return opts?.maxChars && content.length > opts.maxChars
+					? content.slice(0, opts.maxChars)
+					: content;
 			},
 			async writeFile(path: string, content: string): Promise<void> {
 				const s = await ensureSandbox();
