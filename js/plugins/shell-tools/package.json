@@ -1,6 +1,6 @@
 {
   "name": "@parel/shell-tools",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "description": "Workspace-rooted shell tools for PAREL coding agents.",
   "license": "MIT",
   "repository": {
