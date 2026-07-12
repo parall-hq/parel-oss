@@ -1,6 +1,6 @@
 {
   "name": "@parel/workspace",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "PAREL plugin that exposes the canonical workspace capability backed by session plugin store state.",
   "license": "MIT",
   "repository": {

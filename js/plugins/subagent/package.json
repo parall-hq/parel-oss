@@ -1,6 +1,6 @@
 {
   "name": "@parel/subagent",
-  "version": "0.4.8",
+  "version": "0.4.9",
   "description": "PAREL plugin for delegating work to subagents — synchronous inline delegation, plus asynchronous background spawning when the runtime provides the parel.runtime capability.",
   "license": "MIT",
   "repository": {
