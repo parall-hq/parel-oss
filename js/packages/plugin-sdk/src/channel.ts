@@ -9,7 +9,15 @@ export interface ProviderHttpRequest {
 
 export type ConnectorEffect =
 	| { type: "send"; data: string | ArrayBuffer }
-	| { type: "emitEvent"; event: ChannelEnvelope }
+	/**
+	 * Inject an inbound envelope. `deliverTo.childRef` targets a child session
+	 * previously spawned via `spawnChildSession` instead of the binding's normal
+	 * routing — the envelope still flows the full ingress path (dedupe, trust
+	 * gate, audit), only session resolution changes. When `deliverTo` is present,
+	 * childRef must be a non-empty string: a malformed target rejects the event
+	 * instead of silently falling back to binding routing.
+	 */
+	| { type: "emitEvent"; event: ChannelEnvelope; deliverTo?: { childRef: string } }
 	| { type: "setTimer"; key: string; at: number }
 	| { type: "fetch"; request: ProviderHttpRequest; idempotencyKey?: string }
 	| { type: "close"; reason?: string }
@@ -22,7 +30,20 @@ export type ConnectorEffect =
 	 * call), `approve: false` cancels. `comment` is recorded in the pause's resume
 	 * payload for audit. Resolving an already-resolved pause is a no-op.
 	 */
-	| { type: "resolvePause"; pauseId: string; approve: boolean; comment?: string };
+	| { type: "resolvePause"; pauseId: string; approve: boolean; comment?: string }
+	/**
+	 * Spawn a fork child session off this connection's main conversation session
+	 * (fork-on-busy: the connector decides WHEN, the platform executes).
+	 * Idempotent on `childRef` — the same key always resolves to the same child.
+	 * Platform-gated: the binding must opt in to child sessions
+	 * (`childSessions`), its routing mode must be `main`, and the parent's
+	 * subagent depth/concurrency limits apply. Failures come back as a
+	 * `child_spawn_failed` agent event — effects have no synchronous return, so
+	 * that event is the only feedback channel. The child seeds from the parent's
+	 * transcript EXCLUDING any in-flight turn (turn-boundary fork; no
+	 * half-finished output leaks). `input` starts the child's opening turn.
+	 */
+	| { type: "spawnChildSession"; childRef: string; input: string; subject?: string };
 
 export interface ConnectRequest {
 	url: string;
@@ -86,6 +107,13 @@ interface AgentEventBase {
 	turnId: string;
 	subject?: string;
 	envelopeIds: string[];
+	/**
+	 * Present on every event from a connector-spawned child session: the opaque
+	 * correlation key the spawnChildSession effect carried. Connectors should
+	 * track child lifecycle by this key — it is the stable handle they minted;
+	 * `sessionId` is a platform-internal identifier, not a correlation surface.
+	 */
+	childRef?: string;
 }
 
 /**
@@ -94,9 +122,10 @@ interface AgentEventBase {
  * channel declaration's `observe` scopes) and best-effort: events are neither persisted
  * nor replayed — treat them as a display/status feed, never as a data-correctness source.
  *
- * Only the three `turn_*` events are emitted today (`observe: [turn]`); the step-trace
- * events (`model_reasoning` / `tool_call` / `tool_result`, `observe: [steps]`) and
- * `execution_paused` (`observe: [pause]`) are contract-reserved for upcoming slices.
+ * All three scopes are live: turn lifecycle (`observe: [turn]`), step trace
+ * (`model_reasoning` / `tool_call` / `tool_result`, `observe: [steps]`), and
+ * `execution_paused` (`observe: [pause]`). The one exception is `child_spawn_failed`,
+ * which is pushed regardless of the binding's observe scopes (see its doc).
  *
  * A `turn_completed` fires unconditionally on every cleanly finished turn — including
  * turns that produced no reply (`hadOutput: false`), which is the reliable
@@ -127,16 +156,47 @@ export type AgentEvent =
 			pauseId: string;
 			reason: string;
 			detail?: { anchor?: string; toolName?: string; input?: unknown };
-	  });
+	  })
+	/**
+	 * A spawnChildSession effect failed. Not turn-scoped (no AgentEventBase
+	 * fields): the child never existed. Pushed regardless of the binding's
+	 * observe scopes — it is the direct asynchronous error channel for the
+	 * connector's own effect, not ambient observability. `code`: disabled |
+	 * unsupported_routing | no_binding | invalid_request | depth_limit |
+	 * concurrency_limit | spawn_failed. Retrying the SAME childRef is always safe
+	 * (the idempotency anchor prevents duplicate children) and is the right first
+	 * response to any failure: transient causes (`concurrency_limit`, an
+	 * interrupted spawn) converge on retry, and the config-shaped codes (disabled /
+	 * unsupported_routing / no_binding / invalid_request) succeed once fixed. Only
+	 * a terminally-failed ref keeps answering `spawn_failed` ("previously failed
+	 * terminally") — mint a new ref to proceed.
+	 */
+	| {
+			type: "child_spawn_failed";
+			childRef: string;
+			code: string;
+			error: string;
+			// Explicitly absent (not just omitted): keeps pre-narrowing access to the
+			// turn-scoped common fields compiling as `T | undefined` across the union.
+			sessionId?: undefined;
+			turnId?: undefined;
+			subject?: undefined;
+			envelopeIds?: undefined;
+	  };
 
 /**
- * Effects an `onAgentEvent` hook may return: everything except `emitEvent`. An agent
- * event must never inject a new inbound envelope — a `turn_completed` handler that
- * emitted an envelope would start a turn whose completion emits again, an unbounded
- * self-trigger loop — so the exclusion is enforced at the type level, and the platform
- * additionally drops any `emitEvent` that arrives at runtime.
+ * Effects an `onAgentEvent` hook may return: everything except `emitEvent` and
+ * `spawnChildSession`. An agent event must never inject a new inbound envelope or
+ * spawn new execution — a `turn_completed` handler that emitted an envelope (or
+ * spawned a child whose completion pushes again) would be an unbounded self-trigger
+ * loop — so spawn decisions belong on the inbound paths (onMessage / onWebhook). The
+ * exclusion is enforced at the type level, and the platform additionally drops
+ * offending effects that arrive at runtime.
  */
-export type AgentEventEffect = Exclude<ConnectorEffect, { type: "emitEvent" }>;
+export type AgentEventEffect = Exclude<
+	ConnectorEffect,
+	{ type: "emitEvent" } | { type: "spawnChildSession" }
+>;
 
 export interface ChannelConnector {
 	connect?(ctx: ConnectorContext): Promise<ConnectRequest>;
@@ -152,8 +212,8 @@ export interface ChannelConnector {
 	/**
 	 * Agent execution events for turns this connection's envelopes triggered (opt-in via
 	 * the binding's `observe` scopes). Returns AgentEventEffect — ConnectorEffect minus
-	 * `emitEvent` (see its doc for why). Typical effects here are `fetch` (e.g. a status
-	 * API call) or `send`.
+	 * `emitEvent` and `spawnChildSession` (see its doc for why). Typical effects here
+	 * are `fetch` (e.g. a status API call) or `send`.
 	 */
 	onAgentEvent?(event: AgentEvent, ctx: ConnectorContext): Promise<AgentEventEffect[]>;
 }

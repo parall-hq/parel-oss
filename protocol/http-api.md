@@ -282,6 +282,84 @@ POST /execution/snapshots/{snapshotId}/replays
 }
 ```
 
+## Channel Bindings
+
+A binding routes one channel connection's inbound events to one agent, and
+carries the per-binding capability bits: `observe` (agent-event push scopes),
+`injectInFlight` (mid-turn injection of same-conversation events), and
+`childSessions` (connector-spawned fork child sessions).
+
+```http
+POST /channels/bindings
+```
+
+```json
+{
+  "agentId": "agt_...",
+  "connectionId": "chc_...",
+  "routingPolicy": "main",
+  "observe": ["turn", "steps"],
+  "injectInFlight": true,
+  "childSessions": true
+}
+```
+
+`POST` always creates a new binding with a fresh id. `GET /channels/bindings`
+lists the org's bindings; `DELETE /channels/bindings/{bindingId}` removes one.
+
+Update capability bits in place with PATCH — the binding id and its routing
+stay untouched:
+
+```http
+PATCH /channels/bindings/{bindingId}
+```
+
+```json
+{
+  "observe": ["turn", "steps", "pause"],
+  "childSessions": true
+}
+```
+
+- Patchable fields: `observe`, `injectInFlight`, `childSessions`. Anything
+  else — including the routing identity (`agentId`, `connectionId`,
+  `routingPolicy`, `instanceKey`, `filter`) — is rejected with `400`.
+  Repointing a binding is a different operation: DELETE the old binding,
+  then POST its replacement (this order lets the platform retire the old
+  conversation mappings; inbound events during the brief unbound window are
+  ignored, not queued).
+- Idempotent: replaying the same body converges on the same state with no
+  side effects, so reconcile loops can PATCH unconditionally. Concurrent
+  PATCHes of different fields do not overwrite each other — only the
+  supplied fields are written.
+- Effect timing: the child-session gate reads the binding per effect
+  (immediate); `observe` / `injectInFlight` are cached per running session —
+  a PATCH is fully visible within at most 60 seconds.
+- Bindings declared in an agent config's `channels[]` are re-asserted on
+  every deploy of that config: a PATCH to such a binding lasts until the next
+  deploy overwrites it. API-created bindings are only ever changed via PATCH.
+
+**Multiple bindings for the same connection are undefined behavior.** When
+more than one binding exists on a connection, which row takes effect is an
+implementation detail — it is not part of this contract and may change
+(multi-agent fanout on one connection is a declared evolution direction). Do
+not create parallel rows to switch capability bits; use PATCH.
+
+Reset a binding's conversation mapping (the next inbound event starts a fresh
+session; the old session is preserved for audit):
+
+```http
+POST /channels/bindings/{bindingId}/reset
+```
+
+```json
+{ "externalKey": "channel-C042..." }
+```
+
+`externalKey` may be omitted for `main` routing (it defaults to the binding's
+single conversation); other routing policies must name the key. Reset never
+touches capability bits.
+
 ## Secrets
 
 Named values referenced from agent configs as `${NAME}` (uppercase env-var

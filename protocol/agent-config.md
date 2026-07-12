@@ -149,13 +149,26 @@ channels:
 
 - `routing.mode` splits conversations (`main` | `per_subject` | `per_actor` |
   `isolated`); every split shares the same agent instance.
+- `routing.injectInFlight` opts the binding into mid-turn injection: events
+  arriving for the running turn's exact `(connection, subject)` group are
+  materialized at the next step boundary instead of waiting for the turn to
+  end; different-subject events stay queued even when they resolve to the
+  same session (default false).
 - `instance` routes the binding's conversations into a named agent instance
   (default `main`): all of the binding's conversations share that instance's
   entity state — its sandbox, its memory — and follow its version tracking
   (a pinned instance holds its conversations at the pin).
 - `config` values may be `${SECRET_REF}` references resolved at the org scope.
-- `observe` opts the binding into agent-event pushes (`turn`; `steps`/`pause`
-  are contract-reserved).
+- `observe` opts the binding into agent-event pushes; all three scopes are
+  live — `turn` (turn lifecycle), `steps` (model reasoning / tool call / tool
+  result trace), `pause` (execution-pause surfacing).
+- `childSessions` opts the binding into connector-spawned fork child sessions
+  (the `spawnChildSession` connector effect); requires `routing.mode: main`
+  (default false).
+- Declared channels are re-asserted on every deploy: the binding's capability
+  bits are reset to the declared values, overwriting any interim API updates
+  (`PATCH /channels/bindings/{bindingId}`) — the agent config is the source
+  of truth for declarative bindings.
 
 ## Runtime Controls
 
