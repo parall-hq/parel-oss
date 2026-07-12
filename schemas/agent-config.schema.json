@@ -231,6 +231,10 @@
                   "isolated"
                 ],
                 "description": "Conversation split policy for the auto-created binding (default \"main\")."
+              },
+              "injectInFlight": {
+                "type": "boolean",
+                "description": "Opt-in mid-turn injection: events arriving for the running turn's exact (connection, subject) group are materialized at the next step boundary instead of waiting for the turn to end; different-subject events stay queued even when they resolve to the same session (default false)."
               }
             }
           },
@@ -249,6 +253,10 @@
               ]
             },
             "description": "Agent-event push scopes for the auto-created binding (opt-in; omitted = no pushes)."
+          },
+          "childSessions": {
+            "type": "boolean",
+            "description": "Opt-in connector-spawned fork child sessions via the spawnChildSession effect; requires routing.mode \"main\" (default false)."
           }
         }
       }
