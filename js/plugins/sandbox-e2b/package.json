@@ -34,7 +34,8 @@
   "dependencies": {
     "@e2b/code-interpreter": "^2.6.1",
     "@parel/capability-sandbox": "workspace:*",
-    "@parel/plugin-sdk": "workspace:*"
+    "@parel/plugin-sdk": "workspace:*",
+    "e2b": "2.32.0"
   },
   "devDependencies": {
     "@types/bun": "^1.0.0",
