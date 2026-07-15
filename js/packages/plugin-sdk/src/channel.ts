@@ -32,18 +32,38 @@ export type ConnectorEffect =
 	 */
 	| { type: "resolvePause"; pauseId: string; approve: boolean; comment?: string }
 	/**
-	 * Spawn a fork child session off this connection's main conversation session
-	 * (fork-on-busy: the connector decides WHEN, the platform executes).
-	 * Idempotent on `childRef` — the same key always resolves to the same child.
-	 * Platform-gated: the binding must opt in to child sessions
-	 * (`childSessions`), its routing mode must be `main`, and the parent's
-	 * subagent depth/concurrency limits apply. Failures come back as a
+	 * Spawn a child session off this connection's main conversation session
+	 * (the connector decides WHEN, the platform executes). Idempotent on
+	 * `childRef` — the same key always resolves to the same child; `context` is
+	 * not part of the anchor, so the first successful spawn fixes the child and
+	 * later retries' `context` is ignored. Platform-gated: the binding must opt
+	 * in to child sessions (`childSessions`), its routing mode must be `main`,
+	 * and the parent's subagent depth/concurrency limits apply. The child always
+	 * runs the binding's agent, in both modes. Failures come back as a
 	 * `child_spawn_failed` agent event — effects have no synchronous return, so
-	 * that event is the only feedback channel. The child seeds from the parent's
-	 * transcript EXCLUDING any in-flight turn (turn-boundary fork; no
-	 * half-finished output leaks). `input` starts the child's opening turn.
+	 * that event is the only feedback channel. `input` starts the child's
+	 * opening turn.
 	 */
-	| { type: "spawnChildSession"; childRef: string; input: string; subject?: string };
+	| {
+			type: "spawnChildSession";
+			childRef: string;
+			input: string;
+			subject?: string;
+			/**
+			 * How the child's transcript is seeded. `"fork"` (default, the original
+			 * behavior): snapshot the parent's transcript EXCLUDING any in-flight
+			 * turn (turn-boundary fork; no half-finished output leaks), inheriting
+			 * the parent's in-flight config/version and plugin session store.
+			 * `"fresh"`: start from an empty transcript — NOT merely "fork minus
+			 * transcript": the child provisions like a new session of the binding's
+			 * agent (active deployment or instance pin, plugin store starts empty)
+			 * and joins the parent's instance, so instance-scoped state is shared.
+			 * Use it for work lanes (per-fire schedule/task dispatch) that should
+			 * not pay for or see the main conversation's history. Any other value
+			 * rejects with `invalid_request` instead of silently forking.
+			 */
+			context?: "fresh" | "fork";
+	  };
 
 export interface ConnectRequest {
 	url: string;
