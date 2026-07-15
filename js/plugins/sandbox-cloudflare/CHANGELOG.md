@@ -1,5 +1,12 @@
 # @parel/sandbox-cloudflare
 
+## 0.2.13
+
+### Patch Changes
+
+- Updated dependencies [1c2a8c7]
+  - @parel/plugin-sdk@0.13.0
+
 ## 0.2.12
 
 ### Patch Changes

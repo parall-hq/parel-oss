@@ -1,6 +1,6 @@
 {
   "name": "@parel/approval-tools",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "description": "Approval request and callback tools for PAREL coding agents.",
   "license": "MIT",
   "repository": {

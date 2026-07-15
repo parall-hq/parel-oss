@@ -1,5 +1,12 @@
 # @parel/system-static
 
+## 0.0.23
+
+### Patch Changes
+
+- Updated dependencies [1c2a8c7]
+  - @parel/plugin-sdk@0.13.0
+
 ## 0.0.22
 
 ### Patch Changes

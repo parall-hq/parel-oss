@@ -1,6 +1,6 @@
 {
   "name": "@parel/port-tools",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "description": "Sandbox port tools for PAREL coding agents.",
   "license": "MIT",
   "repository": {

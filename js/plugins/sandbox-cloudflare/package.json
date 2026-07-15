@@ -1,6 +1,6 @@
 {
   "name": "@parel/sandbox-cloudflare",
-  "version": "0.2.12",
+  "version": "0.2.13",
   "description": "PAREL sandbox capability provider plugin for Cloudflare Sandbox.",
   "license": "MIT",
   "repository": {
