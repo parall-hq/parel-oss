@@ -256,7 +256,7 @@
           },
           "childSessions": {
             "type": "boolean",
-            "description": "Opt-in connector-spawned fork child sessions via the spawnChildSession effect; requires routing.mode \"main\" (default false)."
+            "description": "Opt-in connector-spawned child sessions via the spawnChildSession effect (context \"fork\" | \"fresh\" seeding, fork default); requires routing.mode \"main\" (default false)."
           }
         }
       }

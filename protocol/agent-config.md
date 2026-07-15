@@ -162,9 +162,9 @@ channels:
 - `observe` opts the binding into agent-event pushes; all three scopes are
   live — `turn` (turn lifecycle), `steps` (model reasoning / tool call / tool
   result trace), `pause` (execution-pause surfacing).
-- `childSessions` opts the binding into connector-spawned fork child sessions
-  (the `spawnChildSession` connector effect); requires `routing.mode: main`
-  (default false).
+- `childSessions` opts the binding into connector-spawned child sessions
+  (the `spawnChildSession` connector effect; `context: "fork" | "fresh"`
+  seeding, fork default); requires `routing.mode: main` (default false).
 - Declared channels are re-asserted on every deploy: the binding's capability
   bits are reset to the declared values, overwriting any interim API updates
   (`PATCH /channels/bindings/{bindingId}`) — the agent config is the source
