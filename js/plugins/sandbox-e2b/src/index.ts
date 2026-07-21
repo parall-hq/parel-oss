@@ -181,10 +181,19 @@ class CommandTimeoutError extends Error {
 	}
 }
 
-/** The SDK's TimeoutError (in-band) or our host-side race — one timeout shape. */
+/**
+ * Only a COMMAND deadline maps to the 124 result: our host-side race, or the
+ * SDK's DeadlineExceeded (its message names `'timeoutMs'`). E2B reuses the
+ * `TimeoutError` class for non-command failures too — requestTimeoutMs, the
+ * sandbox TTL expiring, a killed sandbox — and converting those would report a
+ * dead sandbox as a long-running command; they rethrow and surface as errors.
+ */
 function isCommandTimeout(err: unknown): boolean {
+	if (err instanceof CommandTimeoutError) return true;
 	return (
-		err instanceof CommandTimeoutError || (err instanceof Error && err.name === "TimeoutError")
+		err instanceof Error &&
+		err.name === "TimeoutError" &&
+		err.message.includes("exceeding 'timeoutMs'")
 	);
 }
 

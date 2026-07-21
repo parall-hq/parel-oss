@@ -1199,12 +1199,26 @@ describe("foreground command timeout (2026-07-21 hang)", () => {
 		});
 	});
 
-	it("the SDK's own in-band TimeoutError also surfaces as a 124 result, not a crash", async () => {
+	it("the SDK's own command-deadline TimeoutError also surfaces as a 124 result", async () => {
 		const { sandbox, h } = await timeoutHarness({ commandTimeout: 1_000 });
-		const sdkTimeout = new Error("command timed out");
+		const sdkTimeout = new Error(
+			"deadline: This error is likely due to exceeding 'timeoutMs' \u2014 the total time a long running request can be active.",
+		);
 		sdkTimeout.name = "TimeoutError";
 		sandbox.commands.run.mockRejectedValue(sdkTimeout);
 		const out = await h.tools.get("bash")?.({ command: "sleep 999" }, toolCtx);
 		expect(out).toMatch(/^Exit code: 124\n/);
+	});
+
+	it("non-command SDK TimeoutErrors (sandbox killed/TTL) rethrow instead of masking as 124", async () => {
+		const { sandbox, h } = await timeoutHarness({ commandTimeout: 1_000 });
+		const sandboxDead = new Error(
+			"unavailable: The sandbox was killed or reached its end of life while the request was in flight.",
+		);
+		sandboxDead.name = "TimeoutError";
+		sandbox.commands.run.mockRejectedValue(sandboxDead);
+		await expect(h.tools.get("bash")?.({ command: "true" }, toolCtx)).rejects.toThrow(
+			/killed or reached its end of life/,
+		);
 	});
 });
