@@ -22,7 +22,8 @@
   },
   "config": {
     "template": "Optional E2B sandbox template name (defaults to \"base\").",
-    "timeout": "Optional create timeout in milliseconds (defaults to 300000).",
+    "timeout": "Optional sandbox lifetime in milliseconds before kill/pause (defaults to 300000). This is the sandbox TTL, not a per-command timeout — see commandTimeout.",
+    "commandTimeout": "Optional per-command timeout in milliseconds for foreground commands (bash tool, exec/shell; defaults to 120000). A timed-out command returns exit code 124 instead of hanging the turn. Per-call timeoutMs overrides it.",
     "env": "Optional environment variables injected into the sandbox at cold-start, persistent across all commands."
   },
   "execution": {

@@ -163,6 +163,67 @@ async function runToResult(run: Promise<CommandResult>): Promise<CommandResult> 
 	}
 }
 
+// Hard time budget for every FOREGROUND command (bash tool, exec/shell). Two
+// layers: the SDK's own timeoutMs (the normal signal, enforced in-band), plus
+// a host-side race with a small buffer — an in-band timeout never fires on a
+// silently dead transport, which is how a ~200ms CLI call once hung a turn for
+// 15 minutes until the platform watchdog stepped in (2026-07-21). Config
+// `commandTimeout` sets the default; a per-call opts.timeoutMs overrides it.
+const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
+const HOST_TIMEOUT_BUFFER_MS = 5_000;
+/** Exit code reported for a timed-out command (GNU `timeout` convention). */
+const TIMEOUT_EXIT_CODE = 124;
+
+class CommandTimeoutError extends Error {
+	constructor(timeoutMs: number) {
+		super(`command timed out after ${timeoutMs}ms (no response from the sandbox)`);
+		this.name = "CommandTimeoutError";
+	}
+}
+
+/**
+ * Only a COMMAND deadline maps to the 124 result: our host-side race, or the
+ * SDK's DeadlineExceeded (its message names `'timeoutMs'`). E2B reuses the
+ * `TimeoutError` class for non-command failures too — requestTimeoutMs, the
+ * sandbox TTL expiring, a killed sandbox — and converting those would report a
+ * dead sandbox as a long-running command; they rethrow and surface as errors.
+ */
+function isCommandTimeout(err: unknown): boolean {
+	if (err instanceof CommandTimeoutError) return true;
+	return (
+		err instanceof Error &&
+		err.name === "TimeoutError" &&
+		err.message.includes("exceeding 'timeoutMs'")
+	);
+}
+
+async function runBounded(run: Promise<CommandResult>, timeoutMs: number): Promise<CommandResult> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			runToResult(run),
+			new Promise<never>((_, reject) => {
+				timer = setTimeout(
+					() => reject(new CommandTimeoutError(timeoutMs)),
+					timeoutMs + HOST_TIMEOUT_BUFFER_MS,
+				);
+			}),
+		]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
+
+/** A timeout is a RESULT the agent should see and adapt to, not a tool crash.
+ *  Best-effort semantics: the command may still be running in the sandbox. */
+function timeoutResult(timeoutMs: number): CommandResult {
+	return {
+		exitCode: TIMEOUT_EXIT_CODE,
+		stdout: "",
+		stderr: `command timed out after ${timeoutMs}ms; it may still be running in the sandbox`,
+	} as CommandResult;
+}
+
 export default definePlugin({
 	name: "@parel/sandbox-e2b",
 
@@ -174,6 +235,9 @@ export default definePlugin({
 	async setup(ctx) {
 		const template = (ctx.config.template as string) ?? "base";
 		const timeout = (ctx.config.timeout as number) ?? 300_000;
+		// Per-command budget for foreground runs; `timeout` above is the SANDBOX
+		// lifetime (kill/pause TTL), not a command timeout — the naming predates this.
+		const commandTimeout = (ctx.config.commandTimeout as number) ?? DEFAULT_COMMAND_TIMEOUT_MS;
 		// Persistence: when enabled, the sandbox auto-PAUSES on timeout instead
 		// of being killed — the filesystem survives across turns/sessions and
 		// the existing reconnect path (`Sandbox.connect`) transparently resumes
@@ -665,9 +729,19 @@ export default definePlugin({
 				// resumed sandbox.)
 				const commandEnv =
 					Object.keys(envs).length > 0 || turnEnv ? { ...envs, ...(turnEnv ?? {}) } : undefined;
-				const result = await runToResult(
-					commandEnv ? s.commands.run(command, { envs: commandEnv }) : s.commands.run(command),
-				);
+				let result: CommandResult;
+				try {
+					result = await runBounded(
+						s.commands.run(command, {
+							timeoutMs: commandTimeout,
+							...(commandEnv ? { envs: commandEnv } : {}),
+						}),
+						commandTimeout,
+					);
+				} catch (err) {
+					if (!isCommandTimeout(err)) throw err;
+					result = timeoutResult(commandTimeout);
+				}
 				if (result.exitCode !== 0 && result.stderr) {
 					return `Exit code: ${result.exitCode}\n${result.stderr}`;
 				}
@@ -680,14 +754,24 @@ export default definePlugin({
 			opts?: SandboxExecOptions | SandboxShellOptions,
 		): Promise<SandboxProcessResult> {
 			const s = await ensureSandbox();
+			const timeoutMs =
+				typeof opts?.timeoutMs === "number" && opts.timeoutMs > 0 ? opts.timeoutMs : commandTimeout;
 			// Same resume caveat as the bash tool: carry `config.env` as the
 			// per-command base. The caller's opts.env rides the shell prefix built by
 			// applyShellOptions, which naturally overrides the process environment.
-			const result = await runToResult(
-				Object.keys(envs).length > 0
-					? s.commands.run(applyShellOptions(command, opts), { envs })
-					: s.commands.run(applyShellOptions(command, opts)),
-			);
+			let result: CommandResult;
+			try {
+				result = await runBounded(
+					s.commands.run(applyShellOptions(command, opts), {
+						timeoutMs,
+						...(Object.keys(envs).length > 0 ? { envs } : {}),
+					}),
+					timeoutMs,
+				);
+			} catch (err) {
+				if (!isCommandTimeout(err)) throw err;
+				result = timeoutResult(timeoutMs);
+			}
 			return {
 				stdout: limitOutput(result.stdout, opts?.maxOutputChars),
 				stderr: limitOutput(result.stderr, opts?.maxOutputChars),
