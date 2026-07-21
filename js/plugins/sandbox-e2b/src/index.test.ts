@@ -200,7 +200,7 @@ describe("@parel/sandbox-e2b", () => {
 		await h.hooks.get(LifecycleEvent.SessionStart)?.();
 
 		expect(await h.tools.get("bash")?.({ command: "echo hi" }, toolCtx)).toBe("hello\n");
-		expect(sandbox.commands.run).toHaveBeenCalledWith("echo hi");
+		expect(sandbox.commands.run).toHaveBeenCalledWith("echo hi", { timeoutMs: 120_000 });
 
 		await h.tools.get("file_write")?.({ path: "/tmp/x", content: "data" }, toolCtx);
 		expect(sandbox.files.write).toHaveBeenCalledWith("/tmp/x", "data");
@@ -230,6 +230,7 @@ describe("@parel/sandbox-e2b", () => {
 			await h.tools.get("bash")?.({ command: "parall messages send hi" }, ctxWithInvocation),
 		).toBe("ok\n");
 		expect(sandbox.commands.run).toHaveBeenCalledWith("parall messages send hi", {
+			timeoutMs: 120_000,
 			envs: { PRLL_CHAT_ID: "chat_9", PRLL_SEQ: "7" },
 		});
 	});
@@ -252,6 +253,7 @@ describe("@parel/sandbox-e2b", () => {
 		await h.tools.get("bash")?.({ command: "env" }, ctxWithInvocation);
 		// Static config.env is preserved; the per-turn value wins on a key conflict.
 		expect(sandbox.commands.run).toHaveBeenCalledWith("env", {
+			timeoutMs: 120_000,
 			envs: { BASE_TOKEN: "static", PRLL_CHAT_ID: "new" },
 		});
 	});
@@ -270,7 +272,10 @@ describe("@parel/sandbox-e2b", () => {
 		} as never;
 		await h.tools.get("bash")?.({ command: "env" }, ctxWithNull);
 		// Explicit null clears the key (empty string) instead of leaking the static value.
-		expect(sandbox.commands.run).toHaveBeenCalledWith("env", { envs: { PRLL_CHAT_ID: "" } });
+		expect(sandbox.commands.run).toHaveBeenCalledWith("env", {
+			timeoutMs: 120_000,
+			envs: { PRLL_CHAT_ID: "" },
+		});
 	});
 
 	it("declares it consumes invocation context in the static manifest", () => {
@@ -290,7 +295,7 @@ describe("@parel/sandbox-e2b", () => {
 		expect(capability.id).toBe("sbx_1");
 
 		const result = await capability.process?.exec(["echo", "hello world"]);
-		expect(sandbox.commands.run).toHaveBeenCalledWith("echo 'hello world'");
+		expect(sandbox.commands.run).toHaveBeenCalledWith("echo 'hello world'", { timeoutMs: 120_000 });
 		expect(result).toEqual({ stdout: "hello\n", stderr: "", exitCode: 0 });
 
 		const entries = await capability.fs?.listDir("/tmp");
@@ -1079,6 +1084,7 @@ describe("config.env as the per-command base (resume safety)", () => {
 		await h.tools.get("bash")?.({ command: "env" }, toolCtx);
 
 		expect(sandbox.commands.run).toHaveBeenCalledWith("env", {
+			timeoutMs: 120_000,
 			envs: { BASE_TOKEN: "static", API_ROOT: "https://x" },
 		});
 	});
@@ -1093,7 +1099,7 @@ describe("config.env as the per-command base (resume safety)", () => {
 
 		await h.tools.get("bash")?.({ command: "env" }, toolCtx);
 
-		expect(sandbox.commands.run).toHaveBeenCalledWith("env");
+		expect(sandbox.commands.run).toHaveBeenCalledWith("env", { timeoutMs: 120_000 });
 	});
 
 	it("exec-capability shell commands carry the config.env base", async () => {
@@ -1110,6 +1116,7 @@ describe("config.env as the per-command base (resume safety)", () => {
 		await exec.run("echo hi");
 
 		expect(sandbox.commands.run).toHaveBeenCalledWith("echo hi", {
+			timeoutMs: 120_000,
 			envs: { BASE_TOKEN: "static" },
 		});
 	});
@@ -1135,5 +1142,69 @@ describe("config.env as the per-command base (resume safety)", () => {
 				envs: { BASE_TOKEN: "static", SHARED: "override" },
 			}),
 		);
+	});
+});
+
+describe("foreground command timeout (2026-07-21 hang)", () => {
+	async function timeoutHarness(config: Record<string, unknown>) {
+		const sandbox = makeSandbox();
+		sandboxMock.create.mockResolvedValue(sandbox);
+		const h = makeHarness({ apiKey: "test-key", ...config });
+		await sandboxE2bPlugin.setup(h.ctx);
+		await h.hooks.get(LifecycleEvent.SessionStart)?.();
+		return { sandbox, h };
+	}
+
+	it("bash returns a 124 result instead of hanging when the transport dies silently", async () => {
+		vi.useFakeTimers();
+		try {
+			const { sandbox, h } = await timeoutHarness({ commandTimeout: 1_000 });
+			// The incident shape: commands.run never settles (half-open connection —
+			// the SDK's own in-band timeout cannot fire either).
+			sandbox.commands.run.mockReturnValue(new Promise(() => {}));
+			const pending = h.tools.get("bash")?.({ command: "parall messages send hi" }, toolCtx);
+			await vi.advanceTimersByTimeAsync(1_000 + 5_000 + 1);
+			await expect(pending).resolves.toMatch(/^Exit code: 124\ncommand timed out after 1000ms/);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("exec-capability shell returns exit code 124 on a hung command", async () => {
+		vi.useFakeTimers();
+		try {
+			const { sandbox, h } = await timeoutHarness({ commandTimeout: 1_000 });
+			sandbox.commands.run.mockReturnValue(new Promise(() => {}));
+			const cap = h.provided.get(PAREL_SANDBOX_CAPABILITY) as SandboxCapability;
+			const pending = cap.process?.exec(["sleep", "999"]);
+			await vi.advanceTimersByTimeAsync(1_000 + 5_000 + 1);
+			const result = await pending;
+			expect(result?.exitCode).toBe(124);
+			expect(result?.stderr).toMatch(/timed out after 1000ms/);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("passes the SDK timeoutMs on foreground runs and honors per-call override", async () => {
+		const { sandbox, h } = await timeoutHarness({ commandTimeout: 9_000 });
+		sandbox.commands.run.mockResolvedValue({ exitCode: 0, stdout: "ok", stderr: "" });
+		await h.tools.get("bash")?.({ command: "true" }, toolCtx);
+		expect(sandbox.commands.run).toHaveBeenCalledWith("true", { timeoutMs: 9_000 });
+
+		const cap = h.provided.get(PAREL_SANDBOX_CAPABILITY) as SandboxCapability;
+		await cap.process?.exec(["true"], { timeoutMs: 3_000 });
+		expect(sandbox.commands.run).toHaveBeenLastCalledWith(expect.any(String), {
+			timeoutMs: 3_000,
+		});
+	});
+
+	it("the SDK's own in-band TimeoutError also surfaces as a 124 result, not a crash", async () => {
+		const { sandbox, h } = await timeoutHarness({ commandTimeout: 1_000 });
+		const sdkTimeout = new Error("command timed out");
+		sdkTimeout.name = "TimeoutError";
+		sandbox.commands.run.mockRejectedValue(sdkTimeout);
+		const out = await h.tools.get("bash")?.({ command: "sleep 999" }, toolCtx);
+		expect(out).toMatch(/^Exit code: 124\n/);
 	});
 });
