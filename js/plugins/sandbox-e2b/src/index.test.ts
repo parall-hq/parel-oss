@@ -199,7 +199,10 @@ describe("@parel/sandbox-e2b", () => {
 		await sandboxE2bPlugin.setup(h.ctx);
 		await h.hooks.get(LifecycleEvent.SessionStart)?.();
 
-		expect(await h.tools.get("bash")?.({ command: "echo hi" }, toolCtx)).toBe("hello\n");
+		expect(await h.tools.get("bash")?.({ command: "echo hi" }, toolCtx)).toEqual({
+			content: "hello\n",
+			isError: false,
+		});
 		expect(sandbox.commands.run).toHaveBeenCalledWith("echo hi", { timeoutMs: 120_000 });
 
 		await h.tools.get("file_write")?.({ path: "/tmp/x", content: "data" }, toolCtx);
@@ -228,7 +231,7 @@ describe("@parel/sandbox-e2b", () => {
 		} as never;
 		expect(
 			await h.tools.get("bash")?.({ command: "parall messages send hi" }, ctxWithInvocation),
-		).toBe("ok\n");
+		).toEqual({ content: "ok\n", isError: false });
 		expect(sandbox.commands.run).toHaveBeenCalledWith("parall messages send hi", {
 			timeoutMs: 120_000,
 			envs: { PRLL_CHAT_ID: "chat_9", PRLL_SEQ: "7" },
@@ -422,7 +425,7 @@ describe("@parel/sandbox-e2b", () => {
 	});
 
 	describe("non-zero exit (e2b SDK 2.x throws CommandExitError)", () => {
-		it("bash tool returns the failing command's output instead of crashing the tool", async () => {
+		it("bash tool reports a failing command as an error RESULT — not a crash, not a success", async () => {
 			const sandbox = makeSandbox();
 			sandbox.commands.run.mockRejectedValue(
 				new FakeCommandExitError({
@@ -436,9 +439,49 @@ describe("@parel/sandbox-e2b", () => {
 			await sandboxE2bPlugin.setup(h.ctx);
 			await h.hooks.get(LifecycleEvent.SessionStart)?.();
 
-			expect(await h.tools.get("bash")?.({ command: "cat /tmp/x" }, toolCtx)).toBe(
-				"Exit code: 1\ncat: /tmp/x: No such file or directory",
-			);
+			expect(await h.tools.get("bash")?.({ command: "cat /tmp/x" }, toolCtx)).toEqual({
+				content: "Exit code: 1\ncat: /tmp/x: No such file or directory",
+				isError: true,
+			});
+		});
+
+		// Staging repro matrix. The tool used to return a bare string, which the
+		// runtime records with `isError ?? false` — so EVERY row below persisted as
+		// `success`. The old `exitCode !== 0 && stderr` guard additionally threw the
+		// exit code away when the command failed silently, and its stdout/stderr
+		// branches were mutually exclusive, so one stream was always lost.
+		it.each([
+			{
+				name: "exit 0 stays a success",
+				result: { exitCode: 0, stdout: "", stderr: "" },
+				expected: { content: "", isError: false },
+			},
+			{
+				name: "exit 7 with no output keeps its exit code",
+				result: { exitCode: 7, stdout: "", stderr: "" },
+				expected: { content: "Exit code: 7", isError: true },
+			},
+			{
+				name: "command not found keeps exit 127 and stderr",
+				result: { exitCode: 127, stdout: "", stderr: "bash: nope: command not found" },
+				expected: { content: "Exit code: 127\nbash: nope: command not found", isError: true },
+			},
+			{
+				name: "a failure keeps BOTH stdout and stderr",
+				result: { exitCode: 9, stdout: "partial work", stderr: "failure" },
+				expected: { content: "Exit code: 9\npartial work\nfailure", isError: true },
+			},
+		])("bash tool: $name", async ({ result, expected }) => {
+			const sandbox = makeSandbox();
+			// e2b 2.x resolves on a zero exit and throws CommandExitError otherwise.
+			if (result.exitCode === 0) sandbox.commands.run.mockResolvedValue(result);
+			else sandbox.commands.run.mockRejectedValue(new FakeCommandExitError(result));
+			sandboxMock.create.mockResolvedValue(sandbox);
+			const h = makeHarness();
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+			expect(await h.tools.get("bash")?.({ command: "probe" }, toolCtx)).toEqual(expected);
 		});
 
 		it("sandbox capability exec surfaces exitCode/stderr as a result", async () => {
@@ -581,7 +624,10 @@ describe("@parel/sandbox-e2b", () => {
 			sandbox.commands.run.mockResolvedValue({ exitCode: 0, stdout: "intact\n", stderr: "" });
 			sandboxMock.connect.mockReset();
 			sandboxMock.connect.mockResolvedValue(sandbox);
-			expect(await h.tools.get("bash")?.({ command: "ls" }, toolCtx)).toBe("intact\n");
+			expect(await h.tools.get("bash")?.({ command: "ls" }, toolCtx)).toEqual({
+				content: "intact\n",
+				isError: false,
+			});
 			expect(sandboxMock.connect).toHaveBeenCalledWith("sbx_saved", { apiKey: "test-key" });
 		});
 	});
@@ -598,7 +644,10 @@ describe("@parel/sandbox-e2b", () => {
 			await sandboxE2bPlugin.setup(h.ctx);
 			h.store.set("e2b_sandbox_id", "sbx_paused");
 
-			expect(await h.tools.get("bash")?.({ command: "echo hi" }, toolCtx)).toBe("healed\n");
+			expect(await h.tools.get("bash")?.({ command: "echo hi" }, toolCtx)).toEqual({
+				content: "healed\n",
+				isError: false,
+			});
 			expect(sandboxMock.connect).toHaveBeenCalledWith("sbx_paused", { apiKey: "test-key" });
 			expect(sandboxMock.create).not.toHaveBeenCalled();
 		});
@@ -652,7 +701,7 @@ describe("@parel/sandbox-e2b", () => {
 			await new Promise((resolve) => setTimeout(resolve, 0));
 			release(sandbox);
 
-			expect(await first).toBe("ok\n");
+			expect(await first).toEqual({ content: "ok\n", isError: false });
 			expect(await second).toBe("file contents");
 			expect(sandboxMock.create).toHaveBeenCalledTimes(1);
 		});
@@ -667,7 +716,10 @@ describe("@parel/sandbox-e2b", () => {
 			await expect(h.tools.get("bash")?.({ command: "echo hi" }, toolCtx)).rejects.toThrow(
 				"Failed to create E2B sandbox: E2B 503",
 			);
-			expect(await h.tools.get("bash")?.({ command: "echo hi" }, toolCtx)).toBe("ok\n");
+			expect(await h.tools.get("bash")?.({ command: "echo hi" }, toolCtx)).toEqual({
+				content: "ok\n",
+				isError: false,
+			});
 			expect(sandboxMock.create).toHaveBeenCalledTimes(2);
 		});
 
@@ -691,7 +743,10 @@ describe("@parel/sandbox-e2b", () => {
 			recovered.commands.run.mockResolvedValue({ exitCode: 0, stdout: "back\n", stderr: "" });
 			sandboxMock.connect.mockReset();
 			sandboxMock.connect.mockResolvedValue(recovered);
-			expect(await h.tools.get("bash")?.({ command: "ls" }, toolCtx)).toBe("back\n");
+			expect(await h.tools.get("bash")?.({ command: "ls" }, toolCtx)).toEqual({
+				content: "back\n",
+				isError: false,
+			});
 			expect(sandboxMock.connect).toHaveBeenCalledWith("sbx_1", { apiKey: "test-key" });
 		});
 
@@ -1164,7 +1219,12 @@ describe("foreground command timeout (2026-07-21 hang)", () => {
 			sandbox.commands.run.mockReturnValue(new Promise(() => {}));
 			const pending = h.tools.get("bash")?.({ command: "parall messages send hi" }, toolCtx);
 			await vi.advanceTimersByTimeAsync(1_000 + 5_000 + 1);
-			await expect(pending).resolves.toMatch(/^Exit code: 124\ncommand timed out after 1000ms/);
+			// A timeout is a failed command, so it carries isError like any other
+			// non-zero exit — still a RESULT the agent can adapt to, not a crash.
+			await expect(pending).resolves.toEqual({
+				content: expect.stringMatching(/^Exit code: 124\ncommand timed out after 1000ms/),
+				isError: true,
+			});
 		} finally {
 			vi.useRealTimers();
 		}
@@ -1207,7 +1267,10 @@ describe("foreground command timeout (2026-07-21 hang)", () => {
 		sdkTimeout.name = "TimeoutError";
 		sandbox.commands.run.mockRejectedValue(sdkTimeout);
 		const out = await h.tools.get("bash")?.({ command: "sleep 999" }, toolCtx);
-		expect(out).toMatch(/^Exit code: 124\n/);
+		expect(out).toEqual({
+			content: expect.stringMatching(/^Exit code: 124\n/),
+			isError: true,
+		});
 	});
 
 	it("non-command SDK TimeoutErrors (sandbox killed/TTL) rethrow instead of masking as 124", async () => {

@@ -1,6 +1,8 @@
 import { CommandExitError, type CommandResult, Sandbox } from "@e2b/code-interpreter";
 import {
 	PAREL_SANDBOX_CAPABILITY,
+	renderCommandText,
+	renderCommandToolOutput,
 	type SandboxCapability,
 	type SandboxCommand,
 	type SandboxExecOptions,
@@ -714,38 +716,48 @@ export default definePlugin({
 		// get per-turn env in P0. Threading invocation through the capability route needs
 		// per-turn delivery into the warm runtime plus each consumer forwarding it — a
 		// follow-up (P1). Design: docs/invocation-context.md §6.
+		/**
+		 * Run one foreground command and hand back the RAW result. Rendering is the
+		 * caller's job precisely because the two callers need different things: the
+		 * `exec` capability's contract is a string, while the `bash` TOOL must report
+		 * a non-zero exit as a real error status — a tool handler that returns a bare
+		 * string is recorded with `isError ?? false`, i.e. success, no matter how the
+		 * command actually ended.
+		 */
+		async function runExecCommand(
+			command: string,
+			invocation?: InvocationContext,
+		): Promise<CommandResult> {
+			const s = await ensureSandbox();
+			const turnEnv = invocationEnv(invocation);
+			// `config.env` is the BASE environment of every command, not just a
+			// cold-start artifact: E2B injects cold-start envs only when the sandbox
+			// is CREATED, and a persistent sandbox resumed from a pause comes back
+			// with a fresh process environment — a command relying on the
+			// sandbox-level envs alone silently loses them after any resume. Merge
+			// the base under the per-turn values unconditionally; the per-turn
+			// invocation context wins on key conflicts. (Regression guard: turns
+			// without an invocation context previously ran with NO env at all on a
+			// resumed sandbox.)
+			const commandEnv =
+				Object.keys(envs).length > 0 || turnEnv ? { ...envs, ...(turnEnv ?? {}) } : undefined;
+			try {
+				return await runBounded(
+					s.commands.run(command, {
+						timeoutMs: commandTimeout,
+						...(commandEnv ? { envs: commandEnv } : {}),
+					}),
+					commandTimeout,
+				);
+			} catch (err) {
+				if (!isCommandTimeout(err)) throw err;
+				return timeoutResult(commandTimeout);
+			}
+		}
+
 		const exec = {
 			async run(command: string, invocation?: InvocationContext): Promise<string> {
-				const s = await ensureSandbox();
-				const turnEnv = invocationEnv(invocation);
-				// `config.env` is the BASE environment of every command, not just a
-				// cold-start artifact: E2B injects cold-start envs only when the sandbox
-				// is CREATED, and a persistent sandbox resumed from a pause comes back
-				// with a fresh process environment — a command relying on the
-				// sandbox-level envs alone silently loses them after any resume. Merge
-				// the base under the per-turn values unconditionally; the per-turn
-				// invocation context wins on key conflicts. (Regression guard: turns
-				// without an invocation context previously ran with NO env at all on a
-				// resumed sandbox.)
-				const commandEnv =
-					Object.keys(envs).length > 0 || turnEnv ? { ...envs, ...(turnEnv ?? {}) } : undefined;
-				let result: CommandResult;
-				try {
-					result = await runBounded(
-						s.commands.run(command, {
-							timeoutMs: commandTimeout,
-							...(commandEnv ? { envs: commandEnv } : {}),
-						}),
-						commandTimeout,
-					);
-				} catch (err) {
-					if (!isCommandTimeout(err)) throw err;
-					result = timeoutResult(commandTimeout);
-				}
-				if (result.exitCode !== 0 && result.stderr) {
-					return `Exit code: ${result.exitCode}\n${result.stderr}`;
-				}
-				return result.stdout;
+				return renderCommandText(await runExecCommand(command, invocation));
 			},
 		};
 
@@ -986,7 +998,10 @@ export default definePlugin({
 					required: ["command"],
 				},
 			},
-			async (params, toolCtx) => exec.run(params.command as string, toolCtx.invocationContext),
+			async (params, toolCtx) =>
+				renderCommandToolOutput(
+					await runExecCommand(params.command as string, toolCtx.invocationContext),
+				),
 		);
 
 		ctx.tool(

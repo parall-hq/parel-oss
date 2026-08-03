@@ -82,6 +82,37 @@ export interface SandboxProcessResult {
 	metadata?: Record<string, unknown>;
 }
 
+/** The finished-command shape both renderers below read. */
+export type SandboxCommandOutcome = Pick<SandboxProcessResult, "stdout" | "stderr" | "exitCode">;
+
+/**
+ * Text form of a finished command, for the string-returning `exec` surfaces
+ * (`ExecCapability.run` and every plugin built on it). A non-zero exit leads
+ * with the code and keeps BOTH streams: a failing command whose diagnosis went
+ * to stdout is as common as one that used stderr, and dropping either leaves
+ * the model guessing. Success returns stdout verbatim so the ordinary case
+ * carries no decoration.
+ */
+export function renderCommandText(result: SandboxCommandOutcome): string {
+	if (result.exitCode === 0) return result.stdout;
+	const detail = [result.stdout, result.stderr].filter(Boolean).join("\n");
+	return `Exit code: ${result.exitCode}${detail ? `\n${detail}` : ""}`;
+}
+
+/**
+ * Tool-result form: the same text, plus the `isError` flag the runtime records
+ * as the structured success/error status. Returning a bare string instead
+ * makes every result — including exit 127 — persist as `success`, because the
+ * kernel reads `isError ?? false`. Shell tools must use this, not
+ * `renderCommandText`.
+ */
+export function renderCommandToolOutput(result: SandboxCommandOutcome): {
+	content: string;
+	isError: boolean;
+} {
+	return { content: renderCommandText(result), isError: result.exitCode !== 0 };
+}
+
 export interface SandboxProcessOutputOptions {
 	offset?: number;
 	maxChars?: number;
@@ -278,12 +309,7 @@ export function createSandboxCapabilityViews(
 
 	const exec: SandboxExecView = {
 		async run(command) {
-			const result = await shell(command);
-			if (result.exitCode !== 0) {
-				const detail = [result.stdout, result.stderr].filter(Boolean).join("\n");
-				return `Exit code: ${result.exitCode}${detail ? `\n${detail}` : ""}`;
-			}
-			return result.stdout;
+			return renderCommandText(await shell(command));
 		},
 	};
 
