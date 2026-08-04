@@ -63,6 +63,23 @@ export type ConnectorEffect =
 			 * rejects with `invalid_request` instead of silently forking.
 			 */
 			context?: "fresh" | "fork";
+			/**
+			 * Per-turn invocation context for the child's OPENING turn — the same
+			 * consume-gated channel an `emitEvent` envelope's `context` rides.
+			 * Without it the opening turn is the one turn in a child's life that
+			 * runs without context: it starts from `input` rather than an envelope,
+			 * while every later `deliverTo` envelope carries its own. A connector
+			 * that routes replies from context would see exactly the child's first
+			 * reply detach.
+			 *
+			 * Deliberately NOT named `context` — that is the transcript seeding
+			 * mode above, and it was here first.
+			 *
+			 * A non-object value is dropped by the host's shape gate but does NOT
+			 * reject the spawn: it costs the opening turn its routing metadata,
+			 * not the child.
+			 */
+			invocationContext?: Record<string, unknown>;
 	  };
 
 export interface ConnectRequest {
