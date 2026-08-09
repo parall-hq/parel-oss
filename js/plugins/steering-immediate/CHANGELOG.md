@@ -1,5 +1,12 @@
 # @parel/steering-immediate
 
+## 0.0.25
+
+### Patch Changes
+
+- Updated dependencies
+  - @parel/plugin-sdk@0.15.0
+
 ## 0.0.24
 
 ### Patch Changes

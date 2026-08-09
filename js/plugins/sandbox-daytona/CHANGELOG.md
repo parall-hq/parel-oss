@@ -1,5 +1,12 @@
 # @parel/sandbox-daytona
 
+## 0.3.5
+
+### Patch Changes
+
+- Updated dependencies
+  - @parel/plugin-sdk@0.15.0
+
 ## 0.3.4
 
 ### Patch Changes
