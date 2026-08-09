@@ -1,5 +1,13 @@
 # @parel/filesystem-tools
 
+## 0.2.4
+
+### Patch Changes
+
+- Updated dependencies
+  - @parel/plugin-sdk@0.15.0
+  - @parel/workspace@0.2.5
+
 ## 0.2.3
 
 ### Patch Changes

@@ -1,5 +1,12 @@
 # @parel/sandbox-e2b
 
+## 0.7.1
+
+### Patch Changes
+
+- Updated dependencies
+  - @parel/plugin-sdk@0.15.0
+
 ## 0.7.0
 
 ### Minor Changes
