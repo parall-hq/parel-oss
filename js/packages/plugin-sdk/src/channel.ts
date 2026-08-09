@@ -82,10 +82,40 @@ export type ConnectorEffect =
 			invocationContext?: Record<string, unknown>;
 	  };
 
+/**
+ * Per-connection liveness contract, declared by `connect()`. Without it the
+ * platform falls back to its conservative default: any silence beyond the
+ * platform stale window is treated as a dead socket and re-dialed.
+ *
+ * The runtime cannot observe WebSocket protocol-level ping/pong (the platform
+ * auto-answers them below the JS layer), so liveness must be carried by
+ * application-level frames. Declare the pattern your provider actually uses:
+ *
+ * - Server-heartbeat providers (the server pushes a frame at least every N ms
+ *   when idle): declare `staleAfterMs` at 2–4× the heartbeat interval.
+ * - Client-ping providers (the server expects the client to ping and answers
+ *   with a frame): declare `ping`; the host sends the literal frame on the
+ *   interval without waking the connector, and the provider's reply refreshes
+ *   the liveness clock like any inbound frame.
+ * - Pings that must carry dynamic state (e.g. a sequence number) stay in
+ *   connector code: schedule a `setTimer` effect and emit a `send` effect.
+ *
+ * `staleAfterMs` is the maximum failure-detection delay you accept: a silently
+ * dead socket is only discovered once the window elapses. The platform clamps
+ * declared values to its supported range.
+ */
+export interface ConnectionLiveness {
+	/** Silence tolerated (ms) before the host treats the socket as dead and re-dials. */
+	staleAfterMs?: number;
+	/** Literal text frame the host sends every `intervalMs` while the socket is open. */
+	ping?: { intervalMs: number; frame: string };
+}
+
 export interface ConnectRequest {
 	url: string;
 	headers?: Record<string, string>;
 	protocols?: string[];
+	liveness?: ConnectionLiveness;
 }
 
 export interface WebSocketFrame {

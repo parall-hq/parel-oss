@@ -111,6 +111,7 @@ export type {
 	AgentEventEffect,
 	ChannelConnector,
 	ChannelDelivery,
+	ConnectionLiveness,
 	ConnectorContext,
 	ConnectorEffect,
 	ConnectorStore,
