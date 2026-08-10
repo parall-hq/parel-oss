@@ -1285,3 +1285,140 @@ describe("foreground command timeout (2026-07-21 hang)", () => {
 		);
 	});
 });
+
+// Sync→async promotion (config promoteAfterMs > 0): bash launches detached with
+// file-redirected output from t=0; the sync window is handle.wait() raced
+// against the threshold. Fast commands return as before; a command that
+// outlives the window is promoted to a background process the model can follow
+// up on via the process tools. See the runtime repo's
+// docs/durable-turn-execution.md §5.4.
+describe("bash sync→async promotion", () => {
+	function makePromotionHarness(promoteAfterMs: number) {
+		const sandbox = makeSandbox();
+		sandboxMock.create.mockResolvedValue(sandbox);
+		const h = makeHarness({ apiKey: "test-key", timeout: 300_000, promoteAfterMs });
+		return { sandbox, h };
+	}
+
+	it("returns the file-backed result when the command finishes inside the window", async () => {
+		const { sandbox, h } = makePromotionHarness(5_000);
+		const disconnect = vi.fn().mockResolvedValue(undefined);
+		sandbox.commands.run.mockResolvedValue({
+			pid: 42,
+			wait: () => Promise.resolve({ exitCode: 0, stdout: "", stderr: "" }),
+			disconnect,
+		});
+		sandbox.files.read.mockImplementation((path: string) =>
+			Promise.resolve(path.endsWith("stdout.log") ? "hello out" : ""),
+		);
+		await sandboxE2bPlugin.setup(h.ctx);
+
+		const result = (await h.tools.get("bash")?.({ command: "echo hello" }, toolCtx)) as {
+			content: string;
+			isError: boolean;
+		};
+
+		expect(result).toEqual({ content: "hello out", isError: false });
+		// Launched detached with the durable exit marker from t=0, and an explicit
+		// timeout ceiling (the SDK default of 60s would kill the command).
+		const [command, opts] = sandbox.commands.run.mock.calls[0];
+		expect(command).toContain("exit_code");
+		expect(opts).toMatchObject({ background: true, timeoutMs: 300_000 });
+		// No promotion: nothing registered for the process tools.
+		expect([...h.store.keys()].filter((key) => key.startsWith("e2b_process:"))).toHaveLength(0);
+	});
+
+	it("reports a non-zero exit from the file-backed result as an error", async () => {
+		const { sandbox, h } = makePromotionHarness(5_000);
+		sandbox.commands.run.mockResolvedValue({
+			pid: 42,
+			wait: () => Promise.resolve({ exitCode: 3, stdout: "", stderr: "" }),
+			disconnect: vi.fn().mockResolvedValue(undefined),
+		});
+		sandbox.files.read.mockImplementation((path: string) =>
+			Promise.resolve(path.endsWith("stdout.log") ? "boom-out" : "boom-err"),
+		);
+		await sandboxE2bPlugin.setup(h.ctx);
+
+		const result = (await h.tools.get("bash")?.({ command: "false" }, toolCtx)) as {
+			content: string;
+			isError: boolean;
+		};
+
+		expect(result.isError).toBe(true);
+		expect(result.content).toContain("Exit code: 3");
+		expect(result.content).toContain("boom-out");
+		expect(result.content).toContain("boom-err");
+	});
+
+	it("promotes a command that outlives the window and registers it for the process tools", async () => {
+		const { sandbox, h } = makePromotionHarness(30);
+		const disconnect = vi.fn().mockResolvedValue(undefined);
+		sandbox.commands.run.mockImplementation((command: string) => {
+			if (command.startsWith("tail ")) {
+				return Promise.resolve({ exitCode: 0, stdout: "partial output", stderr: "" });
+			}
+			return Promise.resolve({
+				pid: 77,
+				wait: () => new Promise(() => {}), // never resolves inside the window
+				disconnect,
+			});
+		});
+		await sandboxE2bPlugin.setup(h.ctx);
+
+		const result = (await h.tools.get("bash")?.({ command: "sleep 400" }, toolCtx)) as {
+			content: string;
+			isError: boolean;
+		};
+
+		expect(result.isError).toBe(false);
+		expect(result.content).toContain("promoted to a background process");
+		expect(result.content).toContain("Output so far (tail):\npartial output");
+		const processKeys = [...h.store.keys()].filter((key) => key.startsWith("e2b_process:"));
+		expect(processKeys).toHaveLength(1);
+		const record = h.store.get(processKeys[0]) as { pid: number; command: string; status: string };
+		expect(record).toMatchObject({ pid: 77, command: "sleep 400", status: "running" });
+		expect(result.content).toContain(processKeys[0].slice("e2b_process:".length));
+		expect(disconnect).toHaveBeenCalledOnce();
+	});
+
+	it("treats a wait() transport failure as promotion, not as a tool error", async () => {
+		const { sandbox, h } = makePromotionHarness(5_000);
+		sandbox.commands.run.mockImplementation((command: string) => {
+			if (command.startsWith("tail ")) {
+				return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+			}
+			return Promise.resolve({
+				pid: 78,
+				wait: () => Promise.reject(new Error("stream torn down")),
+				disconnect: vi.fn().mockResolvedValue(undefined),
+			});
+		});
+		await sandboxE2bPlugin.setup(h.ctx);
+
+		const result = (await h.tools.get("bash")?.({ command: "long job" }, toolCtx)) as {
+			content: string;
+			isError: boolean;
+		};
+
+		expect(result.isError).toBe(false);
+		expect(result.content).toContain("promoted to a background process");
+	});
+
+	it("keeps the legacy foreground path when promotion is not configured", async () => {
+		const sandbox = makeSandbox();
+		sandboxMock.create.mockResolvedValue(sandbox);
+		sandbox.commands.run.mockResolvedValue({ exitCode: 0, stdout: "fg out", stderr: "" });
+		const h = makeHarness({ apiKey: "test-key" });
+		await sandboxE2bPlugin.setup(h.ctx);
+
+		const result = (await h.tools.get("bash")?.({ command: "echo hi" }, toolCtx)) as {
+			content: string;
+			isError: boolean;
+		};
+
+		expect(result).toEqual({ content: "fg out", isError: false });
+		const [, opts] = sandbox.commands.run.mock.calls[0];
+		expect(opts?.background).toBeUndefined();
+	});
+});

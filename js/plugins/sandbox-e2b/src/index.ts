@@ -118,6 +118,20 @@ function backgroundCommand(command: string, stdoutPath: string, stderrPath: stri
 	return `mkdir -p ${shellQuote(dir)} && sh -lc ${shellQuote(script)}`;
 }
 
+/**
+ * Like {@link backgroundCommand}, plus a durable exit marker: the wrapper
+ * writes the command's exit code to `<dir>/exit_code`, so ANY future
+ * connection (or none at all) can observe completion. This must be the launch
+ * shape from t=0 — a foreground stream's output has no home once its
+ * connection dies, and redirection cannot be added to a running process.
+ */
+function promotableCommand(command: string, dir: string): string {
+	const script =
+		`(${command}) > ${shellQuote(`${dir}/stdout.log`)} 2> ${shellQuote(`${dir}/stderr.log`)}; ` +
+		`echo $? > ${shellQuote(`${dir}/exit_code`)}`;
+	return `mkdir -p ${shellQuote(dir)} && sh -lc ${shellQuote(script)}`;
+}
+
 function portUrl(host: string, protocol: "http" | "https"): string {
 	if (host.startsWith("http://") || host.startsWith("https://")) return host;
 	return `${protocol}://${host}`;
@@ -240,6 +254,15 @@ export default definePlugin({
 		// Per-command budget for foreground runs; `timeout` above is the SANDBOX
 		// lifetime (kill/pause TTL), not a command timeout — the naming predates this.
 		const commandTimeout = (ctx.config.commandTimeout as number) ?? DEFAULT_COMMAND_TIMEOUT_MS;
+		// Sync→async promotion threshold for the bash tool (0 = disabled, keeping
+		// the legacy foreground path and its exit-124 timeout semantics). When set,
+		// bash commands launch DETACHED with file-redirected output from t=0; the
+		// sync window is a push-style `handle.wait()` raced against this threshold.
+		// Fast commands return exactly as before (~1 extra roundtrip); a command
+		// that outlives the window keeps running in the sandbox and the tool
+		// returns an honest handle the model can follow up on with the process
+		// tools. Timeout stops being a failure and becomes a shape transition.
+		const promoteAfterMs = (ctx.config.promoteAfterMs as number) ?? 0;
 		// Persistence: when enabled, the sandbox auto-PAUSES on timeout instead
 		// of being killed — the filesystem survives across turns/sessions and
 		// the existing reconnect path (`Sandbox.connect`) transparently resumes
@@ -791,6 +814,97 @@ export default definePlugin({
 			};
 		}
 
+		// Sync→async promotion for the bash tool (config `promoteAfterMs` > 0).
+		// The durable exit anchor (files + exit_code) exists from launch, so the
+		// awaiting connection is disposable: the command's result never depends on
+		// this isolate staying alive. See the runtime repo's
+		// docs/durable-turn-execution.md §5.4 for the design.
+		async function runPromotableBash(
+			command: string,
+			invocation?: InvocationContext,
+		): Promise<{ content: string; isError: boolean }> {
+			const s = await ensureSandbox();
+			const turnEnv = invocationEnv(invocation);
+			// Same resume caveat as the foreground bash path: carry config.env as the
+			// per-command base; the per-turn invocation env wins on conflicts.
+			const commandEnv =
+				Object.keys(envs).length > 0 || turnEnv ? { ...envs, ...(turnEnv ?? {}) } : undefined;
+			const id = createId("proc");
+			const dir = processLogDir(id);
+			const stdoutPath = `${dir}/stdout.log`;
+			const stderrPath = `${dir}/stderr.log`;
+			const handle = await s.commands.run(promotableCommand(command, dir), {
+				background: true,
+				...(commandEnv ? { envs: commandEnv } : {}),
+				// Explicit ceiling: the SDK's default timeoutMs (60s) would kill the
+				// command mid-promotion. The sandbox lifetime is the honest upper
+				// bound — beyond it the sandbox pauses/dies anyway.
+				timeoutMs: Math.max(timeout, promoteAfterMs),
+			});
+
+			// Sync window: push-style wait raced against the promotion threshold —
+			// no polling; fast commands resolve on the server's exit notification.
+			let raced: CommandResult | undefined;
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			try {
+				raced = await Promise.race([
+					runToResult(handle.wait()),
+					new Promise<undefined>((resolve) => {
+						timer = setTimeout(() => resolve(undefined), promoteAfterMs);
+					}),
+				]);
+			} catch {
+				// wait() transport failure with the command already detached: treat as
+				// promotion — the process keeps running, the files stay authoritative.
+				raced = undefined;
+			} finally {
+				if (timer) clearTimeout(timer);
+			}
+
+			if (raced !== undefined) {
+				// Completed inside the window. Output lives in the files (the stream
+				// stayed empty by construction) — read both in parallel.
+				const [stdout, stderr] = await Promise.all([
+					s.files.read(stdoutPath).catch(() => ""),
+					s.files.read(stderrPath).catch(() => ""),
+				]);
+				return renderCommandToolOutput({ stdout, stderr, exitCode: raced.exitCode });
+			}
+
+			// Threshold crossed: promote. Register the SAME record shape
+			// processes.start writes, so the model's existing process tools
+			// (@parel/process-tools) can list/tail/stop this command.
+			const record: SandboxProcessHandle = {
+				id,
+				pid: handle.pid,
+				command,
+				stdoutPath,
+				stderrPath,
+				startedAt: new Date().toISOString(),
+				status: "running",
+			};
+			await state.set(storeKey(PROCESS_STORE_PREFIX, id), record);
+			await handle.disconnect().catch((err: unknown) => {
+				const msg = err instanceof Error ? err.message : "Unknown error";
+				ctx.log.warn(`Failed to disconnect from promoted command ${id}: ${msg}`);
+			});
+			const tail = await s.commands
+				.run(`tail -c 2048 ${shellQuote(stdoutPath)} 2>/dev/null || true`)
+				.then((result) => result.stdout)
+				.catch(() => "");
+			const seconds = Math.round(promoteAfterMs / 1000);
+			return {
+				content:
+					`Command still running after ${seconds}s — promoted to a background process (processId: ${id}). ` +
+					`It keeps running in the sandbox; its exit code is written to ${dir}/exit_code on completion. ` +
+					`Check on it with the process tools (tail/list) using processId ${id}. ` +
+					`Note: if the sandbox pauses from inactivity the process does not survive the pause ` +
+					`(unless keepMemory is enabled) — the output files written so far do.` +
+					(tail.trim() ? `\nOutput so far (tail):\n${tail}` : ""),
+				isError: false,
+			};
+		}
+
 		const sandboxCapability: SandboxCapability = {
 			get id() {
 				return sandbox?.sandboxId;
@@ -989,7 +1103,12 @@ export default definePlugin({
 		ctx.tool(
 			{
 				name: "bash",
-				description: "Execute a bash command in the E2B cloud sandbox",
+				description:
+					promoteAfterMs > 0
+						? `Execute a bash command in the E2B cloud sandbox. A command still running after ` +
+							`${Math.round(promoteAfterMs / 1000)}s is promoted to a background process — you get ` +
+							`its processId and can follow up with the process tools (tail/list/stop).`
+						: "Execute a bash command in the E2B cloud sandbox",
 				parameters: {
 					type: "object",
 					properties: {
@@ -999,9 +1118,11 @@ export default definePlugin({
 				},
 			},
 			async (params, toolCtx) =>
-				renderCommandToolOutput(
-					await runExecCommand(params.command as string, toolCtx.invocationContext),
-				),
+				promoteAfterMs > 0
+					? runPromotableBash(params.command as string, toolCtx.invocationContext)
+					: renderCommandToolOutput(
+							await runExecCommand(params.command as string, toolCtx.invocationContext),
+						),
 		);
 
 		ctx.tool(
