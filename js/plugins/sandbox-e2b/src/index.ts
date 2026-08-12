@@ -43,7 +43,7 @@ function invocationEnv(invocation?: InvocationContext): Record<string, string> |
 	return Object.keys(env).length > 0 ? env : undefined;
 }
 
-type ProcessStatus = "running" | "stopped" | "unknown";
+type ProcessStatus = "running" | "stopped" | "completed" | "unknown";
 
 export interface SandboxProcessHandle {
 	id: string;
@@ -52,6 +52,8 @@ export interface SandboxProcessHandle {
 	cwd?: string;
 	stdoutPath: string;
 	stderrPath: string;
+	/** Durable exit marker written by the wrapper on completion; list() reads it for the real status. */
+	exitCodePath?: string;
 	startedAt: string;
 	status: ProcessStatus;
 }
@@ -112,10 +114,32 @@ function processLogDir(processId: string): string {
 	return `/tmp/parel/processes/${processId}`;
 }
 
-function backgroundCommand(command: string, stdoutPath: string, stderrPath: string): string {
+/**
+ * Detached launch shape: the command runs in a subshell with file-redirected
+ * output. With `exitCodePath` the wrapper ALSO persists the command's own exit
+ * status and exits with it — two requirements, one function:
+ *
+ * - The durable exit anchor must exist from t=0 (a foreground stream's output
+ *   has no home once its connection dies; redirection cannot be added later).
+ * - `bash`, not `sh`: the sandbox's default shell is bash (E2B base templates
+ *   are Debian, where /bin/sh is dash) — a tool named "bash" must keep bashisms
+ *   ([[ ]], arrays, <<<, source) working.
+ * - The wrapper must `exit $rc`: with a bare `echo $? > exit_code` as the last
+ *   command, the wrapper's exit status is always 0 and `handle.wait()` would
+ *   report every command as successful — the file is written for durability,
+ *   but the awaited handle must also tell the truth.
+ */
+function backgroundCommand(
+	command: string,
+	stdoutPath: string,
+	stderrPath: string,
+	exitCodePath?: string,
+): string {
 	const dir = stdoutPath.slice(0, stdoutPath.lastIndexOf("/"));
-	const script = `(${command}) > ${shellQuote(stdoutPath)} 2> ${shellQuote(stderrPath)}`;
-	return `mkdir -p ${shellQuote(dir)} && sh -lc ${shellQuote(script)}`;
+	const script =
+		`(${command}) > ${shellQuote(stdoutPath)} 2> ${shellQuote(stderrPath)}` +
+		(exitCodePath ? `; rc=$?; echo $rc > ${shellQuote(exitCodePath)}; exit $rc` : "");
+	return `mkdir -p ${shellQuote(dir)} && bash -lc ${shellQuote(script)}`;
 }
 
 function portUrl(host: string, protocol: "http" | "https"): string {
@@ -162,6 +186,26 @@ async function runToResult(run: Promise<CommandResult>): Promise<CommandResult> 
 	} catch (err) {
 		if (err instanceof CommandExitError) return err;
 		throw err;
+	}
+}
+
+/**
+ * Read a completed command's output file. One retry (the command JUST finished —
+ * a transient RPC/connectivity failure must not turn a successful run into a
+ * silently-empty result); a persistent failure reports honestly instead.
+ */
+async function readOutputFile(
+	files: { read(path: string): Promise<string> },
+	path: string,
+): Promise<string> {
+	try {
+		return await files.read(path);
+	} catch {
+		try {
+			return await files.read(path);
+		} catch (error) {
+			return `[output file could not be read: ${path} — ${error instanceof Error ? error.message : String(error)}]`;
+		}
 	}
 }
 
@@ -240,6 +284,18 @@ export default definePlugin({
 		// Per-command budget for foreground runs; `timeout` above is the SANDBOX
 		// lifetime (kill/pause TTL), not a command timeout — the naming predates this.
 		const commandTimeout = (ctx.config.commandTimeout as number) ?? DEFAULT_COMMAND_TIMEOUT_MS;
+		// Sync→async promotion threshold for the bash tool (0 = disabled, keeping
+		// the legacy foreground path and its exit-124 timeout semantics). When set,
+		// bash commands launch DETACHED with file-redirected output from t=0; the
+		// sync window is a push-style `handle.wait()` raced against this threshold.
+		// Fast commands return exactly as before (~1 extra roundtrip); a command
+		// that outlives the window keeps running in the sandbox and the tool
+		// returns an honest handle the model can follow up on with the process
+		// tools. Timeout stops being a failure and becomes a shape transition.
+		// positiveInt: non-number → 0 (disabled, the legacy foreground path);
+		// clamps to [1, 1h] so a misconfigured value can't force every command
+		// into a wait-then-promote shape.
+		const promoteAfterMs = positiveInt(ctx.config.promoteAfterMs, 0, 3_600_000);
 		// Persistence: when enabled, the sandbox auto-PAUSES on timeout instead
 		// of being killed — the filesystem survives across turns/sessions and
 		// the existing reconnect path (`Sandbox.connect`) transparently resumes
@@ -791,6 +847,144 @@ export default definePlugin({
 			};
 		}
 
+		// Sync→async promotion for the bash tool (config `promoteAfterMs` > 0).
+		// The durable exit anchor (files + exit_code) exists from launch, so the
+		// awaiting connection is disposable: the command's result never depends on
+		// this isolate staying alive. See the runtime repo's
+		// docs/durable-turn-execution.md §5.4 for the design.
+		async function runPromotableBash(
+			command: string,
+			invocation?: InvocationContext,
+		): Promise<{ content: string; isError: boolean }> {
+			const s = await ensureSandbox();
+			const turnEnv = invocationEnv(invocation);
+			// Same resume caveat as the foreground bash path: carry config.env as the
+			// per-command base; the per-turn invocation env wins on conflicts.
+			const commandEnv =
+				Object.keys(envs).length > 0 || turnEnv ? { ...envs, ...(turnEnv ?? {}) } : undefined;
+			const id = createId("proc");
+			const dir = processLogDir(id);
+			const stdoutPath = `${dir}/stdout.log`;
+			const stderrPath = `${dir}/stderr.log`;
+			const handle = await s.commands.run(
+				backgroundCommand(command, stdoutPath, stderrPath, `${dir}/exit_code`),
+				{
+					background: true,
+					...(commandEnv ? { envs: commandEnv } : {}),
+					// Explicit ceiling: the SDK's default timeoutMs (60s) would kill the
+					// command mid-promotion. The sandbox lifetime is the honest upper
+					// bound — beyond it the sandbox pauses/dies anyway.
+					timeoutMs: Math.max(timeout, promoteAfterMs),
+				},
+			);
+
+			// Register the SAME record shape processes.start writes, at LAUNCH —
+			// not at promotion. If this isolate dies inside the sync window the
+			// command keeps running in the sandbox, and the record is the only
+			// thing that lets the model (told "interrupted, outcome unknown" by the
+			// runtime's resume reader) find it via processes.list.
+			const record: SandboxProcessHandle = {
+				id,
+				pid: handle.pid,
+				command,
+				stdoutPath,
+				stderrPath,
+				exitCodePath: `${dir}/exit_code`,
+				startedAt: new Date().toISOString(),
+				status: "running",
+			};
+			// Best-effort: a store failure must not fail a command that will finish
+			// in the window anyway; the promotion path re-attempts the write.
+			await state.set(storeKey(PROCESS_STORE_PREFIX, id), record).catch((err: unknown) => {
+				const msg = err instanceof Error ? err.message : "Unknown error";
+				ctx.log.warn(`Failed to register promotable command ${id} at launch: ${msg}`);
+			});
+
+			// Sync window: push-style wait raced against the promotion threshold —
+			// no polling; fast commands resolve on the server's exit notification.
+			let raced: CommandResult | undefined;
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			try {
+				raced = await Promise.race([
+					runToResult(handle.wait()),
+					new Promise<undefined>((resolve) => {
+						timer = setTimeout(() => resolve(undefined), promoteAfterMs);
+					}),
+				]);
+			} catch {
+				// wait() transport failure with the command already detached: treat as
+				// promotion — the process keeps running, the files stay authoritative.
+				raced = undefined;
+			} finally {
+				if (timer) clearTimeout(timer);
+			}
+
+			if (raced !== undefined) {
+				// Completed inside the window: the tool returned the full result, so
+				// the follow-up record is noise — remove it to keep processes.list
+				// clean. Output lives in the files (the stream stayed empty by
+				// construction); a read failure must be REPORTED, not silently
+				// rendered as an empty success. The exit_code FILE is the design's
+				// durable anchor and the authoritative exit status (the wrapper also
+				// exits with the real code, so either source agrees).
+				await state.delete(storeKey(PROCESS_STORE_PREFIX, id)).catch(() => {});
+				const [stdout, stderr, exitCodeText] = await Promise.all([
+					readOutputFile(s.files, stdoutPath),
+					readOutputFile(s.files, stderrPath),
+					s.files.read(`${dir}/exit_code`).catch(() => ""),
+				]);
+				const fileExitCode = /^\d+$/.test(exitCodeText.trim())
+					? Number(exitCodeText.trim())
+					: undefined;
+				return renderCommandToolOutput({
+					stdout,
+					stderr,
+					exitCode: fileExitCode ?? raced.exitCode,
+				});
+			}
+
+			// Threshold crossed: promote. The record written at launch is the
+			// handle the model's existing process tools (@parel/process-tools)
+			// list/tail/stop this command with. Re-attempt the write in case the
+			// launch-time one failed; the message below still names the id and the
+			// output dir, so the model can always find the files directly.
+			await state.set(storeKey(PROCESS_STORE_PREFIX, id), record).catch((err: unknown) => {
+				const msg = err instanceof Error ? err.message : "Unknown error";
+				ctx.log.warn(`Failed to register promoted command ${id}: ${msg}`);
+			});
+			await handle.disconnect().catch((err: unknown) => {
+				const msg = err instanceof Error ? err.message : "Unknown error";
+				ctx.log.warn(`Failed to disconnect from promoted command ${id}: ${msg}`);
+			});
+			const [tail, tailErr] = await Promise.all([
+				s.commands
+					.run(`tail -c 2048 ${shellQuote(stdoutPath)} 2>/dev/null || true`)
+					.then((result) => result.stdout)
+					.catch(() => ""),
+				s.commands
+					.run(`tail -c 2048 ${shellQuote(stderrPath)} 2>/dev/null || true`)
+					.then((result) => result.stdout)
+					.catch(() => ""),
+			]);
+			const seconds = Math.round(promoteAfterMs / 1000);
+			// The sandbox lifetime (config `timeout`) is the HARD cap: the SDK
+			// kills the command at that age and the sandbox pauses at the same
+			// point. Say so — "it keeps running" without the bound would be a lie.
+			const lifetimeSeconds = Math.round(timeout / 1000);
+			return {
+				content:
+					`Command still running after ${seconds}s — promoted to a background process (processId: ${id}). ` +
+					`It keeps running in the sandbox, hard-capped by the sandbox lifetime (~${lifetimeSeconds}s from ` +
+					`sandbox creation, config timeout) — when the sandbox pauses the process does not survive ` +
+					`(unless keepMemory is enabled), though the output files written so far do. ` +
+					`Its exit code is written to ${dir}/exit_code on completion. ` +
+					`Check on it with the process tools (tail/list) using processId ${id}.` +
+					(tail.trim() ? `\nOutput so far (tail):\n${tail}` : "") +
+					(tailErr.trim() ? `\nStderr so far (tail):\n${tailErr}` : ""),
+				isError: false,
+			};
+		}
+
 		const sandboxCapability: SandboxCapability = {
 			get id() {
 				return sandbox?.sandboxId;
@@ -869,12 +1063,15 @@ export default definePlugin({
 				// Background processes outlive turns and are the most exposed to the
 				// resume caveat — always carry the config.env base under caller envs.
 				const startEnvs = { ...envs, ...(opts.envs ?? {}) };
-				const handle = await s.commands.run(backgroundCommand(command, stdoutPath, stderrPath), {
-					background: true,
-					...(opts.cwd ? { cwd: opts.cwd } : {}),
-					...(Object.keys(startEnvs).length > 0 ? { envs: startEnvs } : {}),
-					...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
-				});
+				const handle = await s.commands.run(
+					backgroundCommand(command, stdoutPath, stderrPath, `${dir}/exit_code`),
+					{
+						background: true,
+						...(opts.cwd ? { cwd: opts.cwd } : {}),
+						...(Object.keys(startEnvs).length > 0 ? { envs: startEnvs } : {}),
+						...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
+					},
+				);
 				const record: SandboxProcessHandle = {
 					id,
 					pid: handle.pid,
@@ -882,6 +1079,7 @@ export default definePlugin({
 					...(opts.cwd ? { cwd: opts.cwd } : {}),
 					stdoutPath,
 					stderrPath,
+					exitCodePath: `${dir}/exit_code`,
 					startedAt: new Date().toISOString(),
 					status: "running",
 				};
@@ -899,15 +1097,20 @@ export default definePlugin({
 					await Promise.all(keys.map((key) => state.get<SandboxProcessHandle>(key)))
 				).filter((record): record is SandboxProcessHandle => Boolean(record));
 				const runningPids = new Set((await s.commands.list()).map((process) => process.pid));
-				return records.map((record) => ({
-					...record,
-					status:
-						record.status === "stopped"
-							? "stopped"
-							: runningPids.has(record.pid)
-								? "running"
-								: "unknown",
-				}));
+				return Promise.all(
+					records.map(async (record) => {
+						if (record.status === "stopped") return record;
+						if (runningPids.has(record.pid)) return { ...record, status: "running" };
+						// Not running: the durable exit marker (when the wrapper wrote
+						// one) is the ground truth — "completed" beats a bare "unknown"
+						// that makes the model poll a corpse.
+						if (record.exitCodePath) {
+							const exitCode = await s.files.read(record.exitCodePath).catch(() => null);
+							if (exitCode !== null) return { ...record, status: "completed" };
+						}
+						return { ...record, status: "unknown" };
+					}),
+				);
 			},
 			async tail(processId, opts = {}) {
 				const s = await ensureSandbox();
@@ -989,7 +1192,12 @@ export default definePlugin({
 		ctx.tool(
 			{
 				name: "bash",
-				description: "Execute a bash command in the E2B cloud sandbox",
+				description:
+					promoteAfterMs > 0
+						? `Execute a bash command in the E2B cloud sandbox. A command still running after ` +
+							`${Math.round(promoteAfterMs / 1000)}s is promoted to a background process — you get ` +
+							`its processId and can follow up with the process tools (tail/list/stop).`
+						: "Execute a bash command in the E2B cloud sandbox",
 				parameters: {
 					type: "object",
 					properties: {
@@ -999,9 +1207,11 @@ export default definePlugin({
 				},
 			},
 			async (params, toolCtx) =>
-				renderCommandToolOutput(
-					await runExecCommand(params.command as string, toolCtx.invocationContext),
-				),
+				promoteAfterMs > 0
+					? runPromotableBash(params.command as string, toolCtx.invocationContext)
+					: renderCommandToolOutput(
+							await runExecCommand(params.command as string, toolCtx.invocationContext),
+						),
 		);
 
 		ctx.tool(
