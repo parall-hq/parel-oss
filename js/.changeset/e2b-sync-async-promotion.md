@@ -11,3 +11,9 @@ in the sandbox and the tool returns an honest handle registered in the shared
 process store, so the model can follow up with the process tools (tail / list /
 stop). Timeout stops being a failure that discards work (exit 124) and becomes
 a shape transition.
+
+The process record is registered at launch (removed when the command finishes
+in-window), so even an isolate death inside the sync window leaves the
+still-running command discoverable via processes.list. Output-file read
+failures on the completed path are reported honestly instead of rendering as
+an empty success, and the promotion message now includes the stderr tail.

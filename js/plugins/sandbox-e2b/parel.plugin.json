@@ -24,6 +24,7 @@
     "template": "Optional E2B sandbox template name (defaults to \"base\").",
     "timeout": "Optional sandbox lifetime in milliseconds before kill/pause (defaults to 300000). This is the sandbox TTL, not a per-command timeout — see commandTimeout.",
     "commandTimeout": "Optional per-command timeout in milliseconds for foreground commands (bash tool, exec/shell; defaults to 120000). A timed-out command returns exit code 124 instead of hanging the turn. Per-call timeoutMs overrides it.",
+    "promoteAfterMs": "Optional sync-to-async promotion threshold for the bash tool (defaults to 0 = disabled, keeping the legacy foreground path). When set, bash launches detached with file-redirected output from t=0 and waits up to this many milliseconds for completion; a command still running past the threshold keeps running in the sandbox and the tool returns its processId, registered in the same store as processes.start, so the process tools (tail/list/stop) can follow up. Commands finishing inside the window return exactly as before. Recommended ~120000-300000.",
     "env": "Optional environment variables injected into the sandbox at cold-start, persistent across all commands."
   },
   "execution": {

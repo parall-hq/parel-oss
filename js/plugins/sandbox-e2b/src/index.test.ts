@@ -1356,7 +1356,11 @@ describe("bash sync→async promotion", () => {
 		const disconnect = vi.fn().mockResolvedValue(undefined);
 		sandbox.commands.run.mockImplementation((command: string) => {
 			if (command.startsWith("tail ")) {
-				return Promise.resolve({ exitCode: 0, stdout: "partial output", stderr: "" });
+				return Promise.resolve({
+					exitCode: 0,
+					stdout: command.includes("stderr.log") ? "partial stderr" : "partial output",
+					stderr: "",
+				});
 			}
 			return Promise.resolve({
 				pid: 77,
@@ -1374,12 +1378,72 @@ describe("bash sync→async promotion", () => {
 		expect(result.isError).toBe(false);
 		expect(result.content).toContain("promoted to a background process");
 		expect(result.content).toContain("Output so far (tail):\npartial output");
+		expect(result.content).toContain("Stderr so far (tail):\npartial stderr");
 		const processKeys = [...h.store.keys()].filter((key) => key.startsWith("e2b_process:"));
 		expect(processKeys).toHaveLength(1);
 		const record = h.store.get(processKeys[0]) as { pid: number; command: string; status: string };
 		expect(record).toMatchObject({ pid: 77, command: "sleep 400", status: "running" });
 		expect(result.content).toContain(processKeys[0].slice("e2b_process:".length));
 		expect(disconnect).toHaveBeenCalledOnce();
+	});
+
+	it("registers the process record at launch and removes it when the command finishes in-window", async () => {
+		const { sandbox, h } = makePromotionHarness(5_000);
+		let resolveWait: (value: { exitCode: number; stdout: string; stderr: string }) => void =
+			() => {};
+		sandbox.commands.run.mockImplementation((command: string) => {
+			if (command.startsWith("tail ")) {
+				return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+			}
+			return Promise.resolve({
+				pid: 79,
+				wait: () =>
+					new Promise((resolve) => {
+						resolveWait = resolve;
+					}),
+				disconnect: vi.fn().mockResolvedValue(undefined),
+			});
+		});
+		sandbox.files.read.mockImplementation((path: string) =>
+			Promise.resolve(path.endsWith("stdout.log") ? "early out" : ""),
+		);
+		await sandboxE2bPlugin.setup(h.ctx);
+
+		const pending = h.tools.get("bash")?.({ command: "long job" }, toolCtx) as Promise<{
+			content: string;
+			isError: boolean;
+		}>;
+		// The record must exist BEFORE the sync window closes — this is what lets
+		// the model find a still-running command after an isolate death mid-window.
+		await vi.waitFor(() => {
+			expect([...h.store.keys()].filter((key) => key.startsWith("e2b_process:"))).toHaveLength(1);
+		});
+
+		resolveWait({ exitCode: 0, stdout: "", stderr: "" });
+		const result = await pending;
+
+		expect(result).toEqual({ content: "early out", isError: false });
+		// Completed in-window: the follow-up record is removed.
+		expect([...h.store.keys()].filter((key) => key.startsWith("e2b_process:"))).toHaveLength(0);
+	});
+
+	it("reports an honest failure when the output files cannot be read", async () => {
+		const { sandbox, h } = makePromotionHarness(5_000);
+		sandbox.commands.run.mockResolvedValue({
+			pid: 42,
+			wait: () => Promise.resolve({ exitCode: 0, stdout: "", stderr: "" }),
+			disconnect: vi.fn().mockResolvedValue(undefined),
+		});
+		sandbox.files.read.mockRejectedValue(new Error("files service down"));
+		await sandboxE2bPlugin.setup(h.ctx);
+
+		const result = (await h.tools.get("bash")?.({ command: "echo hello" }, toolCtx)) as {
+			content: string;
+			isError: boolean;
+		};
+
+		expect(result.isError).toBe(false);
+		expect(result.content).toContain("could not be read");
 	});
 
 	it("treats a wait() transport failure as promotion, not as a tool error", async () => {

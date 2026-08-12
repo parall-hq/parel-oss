@@ -179,6 +179,26 @@ async function runToResult(run: Promise<CommandResult>): Promise<CommandResult> 
 	}
 }
 
+/**
+ * Read a completed command's output file. One retry (the command JUST finished —
+ * a transient RPC/connectivity failure must not turn a successful run into a
+ * silently-empty result); a persistent failure reports honestly instead.
+ */
+async function readOutputFile(
+	files: { read(path: string): Promise<string> },
+	path: string,
+): Promise<string> {
+	try {
+		return await files.read(path);
+	} catch {
+		try {
+			return await files.read(path);
+		} catch (error) {
+			return `[output file could not be read: ${path} — ${error instanceof Error ? error.message : String(error)}]`;
+		}
+	}
+}
+
 // Hard time budget for every FOREGROUND command (bash tool, exec/shell). Two
 // layers: the SDK's own timeoutMs (the normal signal, enforced in-band), plus
 // a host-side race with a small buffer — an in-band timeout never fires on a
@@ -842,6 +862,27 @@ export default definePlugin({
 				timeoutMs: Math.max(timeout, promoteAfterMs),
 			});
 
+			// Register the SAME record shape processes.start writes, at LAUNCH —
+			// not at promotion. If this isolate dies inside the sync window the
+			// command keeps running in the sandbox, and the record is the only
+			// thing that lets the model (told "interrupted, outcome unknown" by the
+			// runtime's resume reader) find it via processes.list.
+			const record: SandboxProcessHandle = {
+				id,
+				pid: handle.pid,
+				command,
+				stdoutPath,
+				stderrPath,
+				startedAt: new Date().toISOString(),
+				status: "running",
+			};
+			// Best-effort: a store failure must not fail a command that will finish
+			// in the window anyway; the promotion path re-attempts the write.
+			await state.set(storeKey(PROCESS_STORE_PREFIX, id), record).catch((err: unknown) => {
+				const msg = err instanceof Error ? err.message : "Unknown error";
+				ctx.log.warn(`Failed to register promotable command ${id} at launch: ${msg}`);
+			});
+
 			// Sync window: push-style wait raced against the promotion threshold —
 			// no polling; fast commands resolve on the server's exit notification.
 			let raced: CommandResult | undefined;
@@ -862,36 +903,42 @@ export default definePlugin({
 			}
 
 			if (raced !== undefined) {
-				// Completed inside the window. Output lives in the files (the stream
-				// stayed empty by construction) — read both in parallel.
+				// Completed inside the window: the tool returned the full result, so
+				// the follow-up record is noise — remove it to keep processes.list
+				// clean. Output lives in the files (the stream stayed empty by
+				// construction); a read failure must be REPORTED, not silently
+				// rendered as an empty success.
+				await state.delete(storeKey(PROCESS_STORE_PREFIX, id)).catch(() => {});
 				const [stdout, stderr] = await Promise.all([
-					s.files.read(stdoutPath).catch(() => ""),
-					s.files.read(stderrPath).catch(() => ""),
+					readOutputFile(s.files, stdoutPath),
+					readOutputFile(s.files, stderrPath),
 				]);
 				return renderCommandToolOutput({ stdout, stderr, exitCode: raced.exitCode });
 			}
 
-			// Threshold crossed: promote. Register the SAME record shape
-			// processes.start writes, so the model's existing process tools
-			// (@parel/process-tools) can list/tail/stop this command.
-			const record: SandboxProcessHandle = {
-				id,
-				pid: handle.pid,
-				command,
-				stdoutPath,
-				stderrPath,
-				startedAt: new Date().toISOString(),
-				status: "running",
-			};
-			await state.set(storeKey(PROCESS_STORE_PREFIX, id), record);
+			// Threshold crossed: promote. The record written at launch is the
+			// handle the model's existing process tools (@parel/process-tools)
+			// list/tail/stop this command with. Re-attempt the write in case the
+			// launch-time one failed; the message below still names the id and the
+			// output dir, so the model can always find the files directly.
+			await state.set(storeKey(PROCESS_STORE_PREFIX, id), record).catch((err: unknown) => {
+				const msg = err instanceof Error ? err.message : "Unknown error";
+				ctx.log.warn(`Failed to register promoted command ${id}: ${msg}`);
+			});
 			await handle.disconnect().catch((err: unknown) => {
 				const msg = err instanceof Error ? err.message : "Unknown error";
 				ctx.log.warn(`Failed to disconnect from promoted command ${id}: ${msg}`);
 			});
-			const tail = await s.commands
-				.run(`tail -c 2048 ${shellQuote(stdoutPath)} 2>/dev/null || true`)
-				.then((result) => result.stdout)
-				.catch(() => "");
+			const [tail, tailErr] = await Promise.all([
+				s.commands
+					.run(`tail -c 2048 ${shellQuote(stdoutPath)} 2>/dev/null || true`)
+					.then((result) => result.stdout)
+					.catch(() => ""),
+				s.commands
+					.run(`tail -c 2048 ${shellQuote(stderrPath)} 2>/dev/null || true`)
+					.then((result) => result.stdout)
+					.catch(() => ""),
+			]);
 			const seconds = Math.round(promoteAfterMs / 1000);
 			return {
 				content:
@@ -900,7 +947,8 @@ export default definePlugin({
 					`Check on it with the process tools (tail/list) using processId ${id}. ` +
 					`Note: if the sandbox pauses from inactivity the process does not survive the pause ` +
 					`(unless keepMemory is enabled) — the output files written so far do.` +
-					(tail.trim() ? `\nOutput so far (tail):\n${tail}` : ""),
+					(tail.trim() ? `\nOutput so far (tail):\n${tail}` : "") +
+					(tailErr.trim() ? `\nStderr so far (tail):\n${tailErr}` : ""),
 				isError: false,
 			};
 		}
