@@ -43,7 +43,7 @@ function invocationEnv(invocation?: InvocationContext): Record<string, string> |
 	return Object.keys(env).length > 0 ? env : undefined;
 }
 
-type ProcessStatus = "running" | "stopped" | "unknown";
+type ProcessStatus = "running" | "stopped" | "completed" | "unknown";
 
 export interface SandboxProcessHandle {
 	id: string;
@@ -52,6 +52,8 @@ export interface SandboxProcessHandle {
 	cwd?: string;
 	stdoutPath: string;
 	stderrPath: string;
+	/** Durable exit marker written by the wrapper on completion; list() reads it for the real status. */
+	exitCodePath?: string;
 	startedAt: string;
 	status: ProcessStatus;
 }
@@ -112,24 +114,32 @@ function processLogDir(processId: string): string {
 	return `/tmp/parel/processes/${processId}`;
 }
 
-function backgroundCommand(command: string, stdoutPath: string, stderrPath: string): string {
-	const dir = stdoutPath.slice(0, stdoutPath.lastIndexOf("/"));
-	const script = `(${command}) > ${shellQuote(stdoutPath)} 2> ${shellQuote(stderrPath)}`;
-	return `mkdir -p ${shellQuote(dir)} && sh -lc ${shellQuote(script)}`;
-}
-
 /**
- * Like {@link backgroundCommand}, plus a durable exit marker: the wrapper
- * writes the command's exit code to `<dir>/exit_code`, so ANY future
- * connection (or none at all) can observe completion. This must be the launch
- * shape from t=0 — a foreground stream's output has no home once its
- * connection dies, and redirection cannot be added to a running process.
+ * Detached launch shape: the command runs in a subshell with file-redirected
+ * output. With `exitCodePath` the wrapper ALSO persists the command's own exit
+ * status and exits with it — two requirements, one function:
+ *
+ * - The durable exit anchor must exist from t=0 (a foreground stream's output
+ *   has no home once its connection dies; redirection cannot be added later).
+ * - `bash`, not `sh`: the sandbox's default shell is bash (E2B base templates
+ *   are Debian, where /bin/sh is dash) — a tool named "bash" must keep bashisms
+ *   ([[ ]], arrays, <<<, source) working.
+ * - The wrapper must `exit $rc`: with a bare `echo $? > exit_code` as the last
+ *   command, the wrapper's exit status is always 0 and `handle.wait()` would
+ *   report every command as successful — the file is written for durability,
+ *   but the awaited handle must also tell the truth.
  */
-function promotableCommand(command: string, dir: string): string {
+function backgroundCommand(
+	command: string,
+	stdoutPath: string,
+	stderrPath: string,
+	exitCodePath?: string,
+): string {
+	const dir = stdoutPath.slice(0, stdoutPath.lastIndexOf("/"));
 	const script =
-		`(${command}) > ${shellQuote(`${dir}/stdout.log`)} 2> ${shellQuote(`${dir}/stderr.log`)}; ` +
-		`echo $? > ${shellQuote(`${dir}/exit_code`)}`;
-	return `mkdir -p ${shellQuote(dir)} && sh -lc ${shellQuote(script)}`;
+		`(${command}) > ${shellQuote(stdoutPath)} 2> ${shellQuote(stderrPath)}` +
+		(exitCodePath ? `; rc=$?; echo $rc > ${shellQuote(exitCodePath)}; exit $rc` : "");
+	return `mkdir -p ${shellQuote(dir)} && bash -lc ${shellQuote(script)}`;
 }
 
 function portUrl(host: string, protocol: "http" | "https"): string {
@@ -282,7 +292,10 @@ export default definePlugin({
 		// that outlives the window keeps running in the sandbox and the tool
 		// returns an honest handle the model can follow up on with the process
 		// tools. Timeout stops being a failure and becomes a shape transition.
-		const promoteAfterMs = (ctx.config.promoteAfterMs as number) ?? 0;
+		// positiveInt: non-number → 0 (disabled, the legacy foreground path);
+		// clamps to [1, 1h] so a misconfigured value can't force every command
+		// into a wait-then-promote shape.
+		const promoteAfterMs = positiveInt(ctx.config.promoteAfterMs, 0, 3_600_000);
 		// Persistence: when enabled, the sandbox auto-PAUSES on timeout instead
 		// of being killed — the filesystem survives across turns/sessions and
 		// the existing reconnect path (`Sandbox.connect`) transparently resumes
@@ -853,14 +866,17 @@ export default definePlugin({
 			const dir = processLogDir(id);
 			const stdoutPath = `${dir}/stdout.log`;
 			const stderrPath = `${dir}/stderr.log`;
-			const handle = await s.commands.run(promotableCommand(command, dir), {
-				background: true,
-				...(commandEnv ? { envs: commandEnv } : {}),
-				// Explicit ceiling: the SDK's default timeoutMs (60s) would kill the
-				// command mid-promotion. The sandbox lifetime is the honest upper
-				// bound — beyond it the sandbox pauses/dies anyway.
-				timeoutMs: Math.max(timeout, promoteAfterMs),
-			});
+			const handle = await s.commands.run(
+				backgroundCommand(command, stdoutPath, stderrPath, `${dir}/exit_code`),
+				{
+					background: true,
+					...(commandEnv ? { envs: commandEnv } : {}),
+					// Explicit ceiling: the SDK's default timeoutMs (60s) would kill the
+					// command mid-promotion. The sandbox lifetime is the honest upper
+					// bound — beyond it the sandbox pauses/dies anyway.
+					timeoutMs: Math.max(timeout, promoteAfterMs),
+				},
+			);
 
 			// Register the SAME record shape processes.start writes, at LAUNCH —
 			// not at promotion. If this isolate dies inside the sync window the
@@ -873,6 +889,7 @@ export default definePlugin({
 				command,
 				stdoutPath,
 				stderrPath,
+				exitCodePath: `${dir}/exit_code`,
 				startedAt: new Date().toISOString(),
 				status: "running",
 			};
@@ -907,13 +924,23 @@ export default definePlugin({
 				// the follow-up record is noise — remove it to keep processes.list
 				// clean. Output lives in the files (the stream stayed empty by
 				// construction); a read failure must be REPORTED, not silently
-				// rendered as an empty success.
+				// rendered as an empty success. The exit_code FILE is the design's
+				// durable anchor and the authoritative exit status (the wrapper also
+				// exits with the real code, so either source agrees).
 				await state.delete(storeKey(PROCESS_STORE_PREFIX, id)).catch(() => {});
-				const [stdout, stderr] = await Promise.all([
+				const [stdout, stderr, exitCodeText] = await Promise.all([
 					readOutputFile(s.files, stdoutPath),
 					readOutputFile(s.files, stderrPath),
+					s.files.read(`${dir}/exit_code`).catch(() => ""),
 				]);
-				return renderCommandToolOutput({ stdout, stderr, exitCode: raced.exitCode });
+				const fileExitCode = /^\d+$/.test(exitCodeText.trim())
+					? Number(exitCodeText.trim())
+					: undefined;
+				return renderCommandToolOutput({
+					stdout,
+					stderr,
+					exitCode: fileExitCode ?? raced.exitCode,
+				});
 			}
 
 			// Threshold crossed: promote. The record written at launch is the
@@ -940,13 +967,18 @@ export default definePlugin({
 					.catch(() => ""),
 			]);
 			const seconds = Math.round(promoteAfterMs / 1000);
+			// The sandbox lifetime (config `timeout`) is the HARD cap: the SDK
+			// kills the command at that age and the sandbox pauses at the same
+			// point. Say so — "it keeps running" without the bound would be a lie.
+			const lifetimeSeconds = Math.round(timeout / 1000);
 			return {
 				content:
 					`Command still running after ${seconds}s — promoted to a background process (processId: ${id}). ` +
-					`It keeps running in the sandbox; its exit code is written to ${dir}/exit_code on completion. ` +
-					`Check on it with the process tools (tail/list) using processId ${id}. ` +
-					`Note: if the sandbox pauses from inactivity the process does not survive the pause ` +
-					`(unless keepMemory is enabled) — the output files written so far do.` +
+					`It keeps running in the sandbox, hard-capped by the sandbox lifetime (~${lifetimeSeconds}s from ` +
+					`sandbox creation, config timeout) — when the sandbox pauses the process does not survive ` +
+					`(unless keepMemory is enabled), though the output files written so far do. ` +
+					`Its exit code is written to ${dir}/exit_code on completion. ` +
+					`Check on it with the process tools (tail/list) using processId ${id}.` +
 					(tail.trim() ? `\nOutput so far (tail):\n${tail}` : "") +
 					(tailErr.trim() ? `\nStderr so far (tail):\n${tailErr}` : ""),
 				isError: false,
@@ -1031,12 +1063,15 @@ export default definePlugin({
 				// Background processes outlive turns and are the most exposed to the
 				// resume caveat — always carry the config.env base under caller envs.
 				const startEnvs = { ...envs, ...(opts.envs ?? {}) };
-				const handle = await s.commands.run(backgroundCommand(command, stdoutPath, stderrPath), {
-					background: true,
-					...(opts.cwd ? { cwd: opts.cwd } : {}),
-					...(Object.keys(startEnvs).length > 0 ? { envs: startEnvs } : {}),
-					...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
-				});
+				const handle = await s.commands.run(
+					backgroundCommand(command, stdoutPath, stderrPath, `${dir}/exit_code`),
+					{
+						background: true,
+						...(opts.cwd ? { cwd: opts.cwd } : {}),
+						...(Object.keys(startEnvs).length > 0 ? { envs: startEnvs } : {}),
+						...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
+					},
+				);
 				const record: SandboxProcessHandle = {
 					id,
 					pid: handle.pid,
@@ -1044,6 +1079,7 @@ export default definePlugin({
 					...(opts.cwd ? { cwd: opts.cwd } : {}),
 					stdoutPath,
 					stderrPath,
+					exitCodePath: `${dir}/exit_code`,
 					startedAt: new Date().toISOString(),
 					status: "running",
 				};
@@ -1061,15 +1097,20 @@ export default definePlugin({
 					await Promise.all(keys.map((key) => state.get<SandboxProcessHandle>(key)))
 				).filter((record): record is SandboxProcessHandle => Boolean(record));
 				const runningPids = new Set((await s.commands.list()).map((process) => process.pid));
-				return records.map((record) => ({
-					...record,
-					status:
-						record.status === "stopped"
-							? "stopped"
-							: runningPids.has(record.pid)
-								? "running"
-								: "unknown",
-				}));
+				return Promise.all(
+					records.map(async (record) => {
+						if (record.status === "stopped") return record;
+						if (runningPids.has(record.pid)) return { ...record, status: "running" };
+						// Not running: the durable exit marker (when the wrapper wrote
+						// one) is the ground truth — "completed" beats a bare "unknown"
+						// that makes the model poll a corpse.
+						if (record.exitCodePath) {
+							const exitCode = await s.files.read(record.exitCodePath).catch(() => null);
+							if (exitCode !== null) return { ...record, status: "completed" };
+						}
+						return { ...record, status: "unknown" };
+					}),
+				);
 			},
 			async tail(processId, opts = {}) {
 				const s = await ensureSandbox();

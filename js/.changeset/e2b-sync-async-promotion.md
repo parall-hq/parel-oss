@@ -16,4 +16,13 @@ The process record is registered at launch (removed when the command finishes
 in-window), so even an isolate death inside the sync window leaves the
 still-running command discoverable via processes.list. Output-file read
 failures on the completed path are reported honestly instead of rendering as
-an empty success, and the promotion message now includes the stderr tail.
+an empty success, and the promotion message now includes the stderr tail and
+names the sandbox-lifetime hard cap.
+
+The wrapper now runs under `bash` (not `sh`, which is dash on the Debian base
+template — bashisms like `[[ ]]` and arrays keep working), persists the
+command's exit status to `exit_code` AND exits with it (previously the last
+command was `echo`, so `handle.wait()` reported exit 0 for every command), and
+the completed path trusts the `exit_code` file as the authoritative status.
+`processes.start` records now also carry `exitCodePath`, and `processes.list`
+reports finished processes as `completed` instead of `unknown`.
