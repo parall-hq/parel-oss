@@ -15,8 +15,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check release gate
+        # The commit message goes through an env var, NOT inline: a multi-line
+        # squash-merge message inline breaks the [[ == ]] parse ("conditional
+        # binary operator expected") and fails the check on every ordinary push.
+        env:
+          HEAD_MSG: ${{ github.event.head_commit.message }}
         run: |
-          if [[ "${{ github.event.head_commit.message }}" == chore:\ version\ packages* ]]; then
+          if [[ "$HEAD_MSG" == chore:\ version\ packages* ]]; then
             echo "Version packages commit detected; publish job will run."
           else
             echo "Release skipped: head commit is not a version packages commit."
