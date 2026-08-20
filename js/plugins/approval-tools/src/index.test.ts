@@ -1,7 +1,6 @@
 import {
-	type HookHandler,
 	type InputQueueItem,
-	LifecycleEvent,
+	type NormalizeHandler,
 	type PluginContext,
 	type SessionStore,
 	type ToolDefinition,
@@ -14,7 +13,7 @@ import approvalToolsPlugin from "./index.js";
 interface Harness {
 	ctx: PluginContext;
 	tools: Map<string, { def: ToolDefinition; handler: ToolHandler }>;
-	hooks: Map<string, HookHandler<typeof LifecycleEvent.ContextBuild>[]>;
+	normalizers: { types: string[]; handler: NormalizeHandler }[];
 	store: SessionStore;
 	interrupt: ReturnType<typeof vi.fn>;
 	inputItems: InputQueueItem[];
@@ -41,7 +40,7 @@ function makeStore(): SessionStore & { records: Map<string, unknown> } {
 
 function makeHarness(inputItems: InputQueueItem[] = []): Harness {
 	const tools = new Map<string, { def: ToolDefinition; handler: ToolHandler }>();
-	const hooks = new Map<string, HookHandler<typeof LifecycleEvent.ContextBuild>[]>();
+	const normalizers: { types: string[]; handler: NormalizeHandler }[] = [];
 	const store = makeStore();
 	const interrupt = vi.fn();
 	const ctx = {
@@ -78,13 +77,14 @@ function makeHarness(inputItems: InputQueueItem[] = []): Harness {
 		tool(def: ToolDefinition, handler: ToolHandler) {
 			tools.set(def.name, { def, handler });
 		},
-		hook(event: string, handler: HookHandler<typeof LifecycleEvent.ContextBuild>) {
-			hooks.set(event, [...(hooks.get(event) ?? []), handler]);
+		hook() {},
+		normalize(types: string[], handler: NormalizeHandler) {
+			normalizers.push({ types, handler });
 		},
 		provide() {},
 		interrupt,
 	} as unknown as PluginContext;
-	return { ctx, tools, hooks, store, interrupt, inputItems };
+	return { ctx, tools, normalizers, store, interrupt, inputItems };
 }
 
 describe("@parel/approval-tools", () => {
@@ -121,29 +121,8 @@ describe("@parel/approval-tools", () => {
 		});
 	});
 
-	it("renders approval_result callbacks and updates stored status", async () => {
-		const h = makeHarness([
-			{
-				id: "input_1",
-				type: "async_callback",
-				payload: {
-					callbackKind: "approval_result",
-					approvalId: "approval_call_1",
-					status: "approved",
-					comment: "Proceed",
-					resolvedBy: "user-1",
-				},
-				source: "test",
-				timestamp: 1_700_000_000_000,
-			},
-			{
-				id: "input_2",
-				type: "async_callback",
-				payload: { callbackKind: "subagent_result", summary: "leave me alone" },
-				source: "test",
-				timestamp: 1_700_000_000_001,
-			},
-		]);
+	it("normalizes approval_result callbacks into transcript messages and updates stored status", async () => {
+		const h = makeHarness();
 		await h.store.set<ApprovalRequestRecord>("approval:approval_call_1", {
 			approvalId: "approval_call_1",
 			status: "pending",
@@ -153,44 +132,60 @@ describe("@parel/approval-tools", () => {
 		});
 		await approvalToolsPlugin.setup(h.ctx);
 
-		const hook = h.hooks.get(LifecycleEvent.ContextBuild)?.[0];
-		const result = await hook?.({
-			event: LifecycleEvent.ContextBuild,
+		expect(h.normalizers).toHaveLength(1);
+		expect(h.normalizers[0]?.types).toEqual(["async_callback"]);
+		const normalize = h.normalizers[0]?.handler as NormalizeHandler;
+		const normalizeCtx = {
 			session: {} as never,
 			store: h.store,
 			inputs: h.ctx.inputs,
-			tools: {} as never,
-			system: "",
-			messages: [],
-		});
+			log: { debug() {}, info() {}, warn() {}, error() {} },
+		};
 
-		expect(result).toMatchObject({
-			action: "continue",
-			mutations: {
-				messages: [
+		const messages = await normalize(
+			"async_callback",
+			{
+				callbackKind: "approval_result",
+				approvalId: "approval_call_1",
+				status: "approved",
+				comment: "Proceed",
+				resolvedBy: "user-1",
+			},
+			normalizeCtx,
+		);
+		expect(messages).toEqual([
+			{
+				role: "user",
+				parts: [
 					{
-						role: "user",
-						parts: [
-							{
-								type: "text",
-								text: expect.stringContaining(
-									'<approval_result id="approval_call_1" status="approved">',
-								),
-							},
-						],
+						type: "text",
+						text: expect.stringContaining(
+							'<approval_result id="approval_call_1" status="approved">',
+						),
+						visibility: "chat",
 					},
 				],
 			},
-		});
+		]);
 		await expect(
 			h.store.get<ApprovalRequestRecord>("approval:approval_call_1"),
 		).resolves.toMatchObject({
 			status: "approved",
 			resolvedBy: "user-1",
 			comment: "Proceed",
+			action: "run deploy",
+			requestedAt: "earlier",
 		});
-		expect(h.inputItems).toHaveLength(1);
-		expect(h.inputItems[0]?.payload).toMatchObject({ callbackKind: "subagent_result" });
+
+		// Non-approval callbacks are deferred untouched to other normalizers or the
+		// host fallback — never claimed, never store-mutated.
+		await expect(
+			normalize(
+				"async_callback",
+				{ callbackKind: "subagent_result", summary: "leave me alone" },
+				normalizeCtx,
+			),
+		).resolves.toBeNull();
 	});
 
 	it("checks stored approval status", async () => {

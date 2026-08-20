@@ -394,14 +394,14 @@ export interface NormalizeContext {
 /**
  * Turns an inbound platform input (an `InputQueueItem` of a declared type, e.g.
  * "async_callback") into canonical transcript messages at intake. Returning
- * `null` DEFERS: the input is left untouched for the next registered normalizer,
- * a hook consumer, or the host's own type-specific handling. A normalizer must
- * claim only inputs it owns and must NOT rely on a blanket host fallback for
- * deferred inputs — `async_callback`, for instance, is a shared type whose
- * `approval_result` kind is consumed by a different plugin's hook, so a host
- * must not materialize a deferred callback as a generic text message. The host
- * persists the returned messages, so replay reuses the stored result and is
- * immune to plugin version drift.
+ * `null` DEFERS: the input is passed to the next registered normalizer, and
+ * when every normalizer defers, the host renders its own type/kind-specific
+ * fallback so the input still materializes and is consumed at its turn — no
+ * input survives intake as a bare re-triggerable queue row (an input nobody
+ * claimed used to re-fire an empty wake turn forever). A normalizer must claim
+ * only inputs it owns: on a shared type like `async_callback`, claim your
+ * `callbackKind` and defer the rest. The host persists the returned messages,
+ * so replay reuses the stored result and is immune to plugin version drift.
  */
 export type NormalizeHandler = (
 	type: string,
