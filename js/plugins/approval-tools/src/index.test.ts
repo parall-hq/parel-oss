@@ -1,10 +1,10 @@
-import {
-	type InputQueueItem,
-	type NormalizeHandler,
-	type PluginContext,
-	type SessionStore,
-	type ToolDefinition,
-	type ToolHandler,
+import type {
+	InputQueueItem,
+	NormalizeHandler,
+	PluginContext,
+	SessionStore,
+	ToolDefinition,
+	ToolHandler,
 } from "@parel/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 import type { ApprovalRequestRecord } from "./index.js";
