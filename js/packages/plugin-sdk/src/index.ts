@@ -93,6 +93,8 @@ export type {
 	ToolResultPart,
 	ToolScheduling,
 	ToolSchedulingMode,
+	TranscriptReader,
+	TranscriptReadRange,
 } from "@parel/core";
 export {
 	findProviderArtifact,
