@@ -1,6 +1,6 @@
 {
   "name": "@parel/system-static",
-  "version": "0.0.25",
+  "version": "0.0.26",
   "description": "PAREL plugin for static system prompt injection.",
   "license": "MIT",
   "repository": {

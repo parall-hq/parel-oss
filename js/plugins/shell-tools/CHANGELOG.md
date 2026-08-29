@@ -1,5 +1,13 @@
 # @parel/shell-tools
 
+## 0.1.18
+
+### Patch Changes
+
+- Updated dependencies [cd3b975]
+  - @parel/plugin-sdk@0.15.1
+  - @parel/workspace@0.2.6
+
 ## 0.1.17
 
 ### Patch Changes
