@@ -1,31 +1,46 @@
-import type { Message, MessagePart } from "@parel/plugin-sdk";
+import type { HookContext, Message, MessagePart, TranscriptReader } from "@parel/plugin-sdk";
 import { definePlugin, LifecycleEvent, type ParelPlugin } from "@parel/plugin-sdk";
 import manifest from "../parel.plugin.json" with { type: "json" };
 
 // @parel/memory-rolling-summary — keep the model's context window bounded by
 // rolling older messages into a running summary.
 //
-// Two cooperating hooks:
-//  - context:build  PRUNES the window: drops the already-summarized leading
-//                   messages from the model call and injects the running summary
-//                   into the system prompt. This is what actually shrinks tokens.
-//  - turn:end       ROLLS the summary forward: when the un-summarized tail grows
-//                   past the threshold, it folds everything older than the last
+// Three cooperating hooks:
+//  - context:build  PRUNES the window: reads only the not-yet-summarized tail of
+//                   the transcript path and injects the running summary into the
+//                   system prompt. This is what actually shrinks tokens.
+//  - step:end /     ROLL the summary forward: when the un-summarized tail grows
+//    turn:end       past the threshold, fold everything older than the last
 //                   `keep_recent_messages` into the *existing* summary with one
-//                   model call, and advances a high-water mark.
+//                   model call, and advance the high-water mark. Checking at step
+//                   boundaries too means a long agentic turn cannot blow the
+//                   window between turn ends.
 //
-// State (store key STATE_KEY): { summary, summarizedCount }. `summarizedCount` is
-// a prefix length over the session's append-only message history, so it stays
-// valid across turns — history only grows at the tail, and context:build always
-// receives the full history (we prune only a per-call view of it, never the
-// persisted record).
+// Coordinates are transcript PATH coordinates (`message.seq`), not array
+// positions: a pointer-forked session's path continues its parent's seqs, so a
+// count would be wrong there. Messages without a seq (older hosts, tests) fall
+// back to their 1-based position. State (store key STATE_KEY):
+// { summary, summarizedUptoSeq } — the legacy `summarizedCount` field is read
+// as a seq (equal under contiguous numbering) so existing sessions carry over.
+//
+// The plugin declares `consumes.transcript: "lazy"`: on hosts that serve the
+// transcript reader (hookCtx.transcript) it pulls just the tail it needs instead
+// of receiving the whole history on every dispatch; on older hosts it falls back
+// to the pushed `messages` array. Either way it only ever shapes a per-call view
+// of the history — the persisted transcript is never touched.
 
 const STATE_KEY = "rolling_summary";
 
 interface RollingState {
 	summary: string;
-	/** Number of leading history messages already folded into `summary`. */
-	summarizedCount: number;
+	/** Path coordinate up to which history is folded into `summary`. */
+	summarizedUptoSeq?: number;
+	/** Legacy field (pre path-coordinate state): a prefix length, read as a seq. */
+	summarizedCount?: number;
+}
+
+function summarizedUpto(state: RollingState | null | undefined): number {
+	return state?.summarizedUptoSeq ?? state?.summarizedCount ?? 0;
 }
 
 function textOf(part: MessagePart): string {
@@ -74,57 +89,93 @@ function estimateTokens(messages: Message[]): number {
 	return Math.ceil(chars / 4);
 }
 
+/** Path coordinate of a message: its seq, else its 1-based position in the pushed array. */
+function seqAt(message: Message, position: number): number {
+	return message.seq ?? position + 1;
+}
+
+/** The not-yet-summarized tail (seq > upto): pulled through the reader when the host serves one, else sliced from the pushed array. */
+async function readTail(
+	hookCtx: { messages?: Message[]; transcript?: TranscriptReader },
+	upto: number,
+): Promise<Message[]> {
+	if (hookCtx.transcript) return hookCtx.transcript.read({ fromSeq: upto + 1 });
+	return (hookCtx.messages ?? []).filter((message, position) => seqAt(message, position) > upto);
+}
+
 export default definePlugin({
 	name: "@parel/memory-rolling-summary",
 	execution: manifest.execution as ParelPlugin["execution"],
+	consumes: manifest.consumes as ParelPlugin["consumes"],
 
 	async setup(ctx) {
-		const maxContextTokens = (ctx.config.max_context_tokens as number) ?? 100_000;
 		const compactAt = (ctx.config.compact_at as number) ?? 0.8;
-		const threshold = maxContextTokens * compactAt;
 		const keepRecent = Math.max(2, (ctx.config.keep_recent_messages as number) ?? 12);
+		// Budget fact: an explicit config wins; else the adapter's advertised window
+		// (0 = unknown on *-compatible endpoints); else a conservative default.
+		const maxContextTokens = (() => {
+			const configured = ctx.config.max_context_tokens as number | undefined;
+			if (typeof configured === "number" && configured > 0) return configured;
+			try {
+				const advertised = ctx.model.capabilities().maxContextTokens;
+				if (typeof advertised === "number" && advertised > 0) return advertised;
+			} catch {
+				// No resolvable route yet — fall through to the default.
+			}
+			return 100_000;
+		})();
+		const threshold = maxContextTokens * compactAt;
 
-		// Full message history seen at the last context:build, so turn:end — whose
-		// event context carries no messages — can read it.
+		// What the last context:build saw: the reader (lazy hosts) or the pushed
+		// history (legacy hosts). The fold hooks' contexts carry no messages.
+		let lastReader: TranscriptReader | undefined;
 		let lastMessages: Message[] = [];
 
 		ctx.hook(LifecycleEvent.ContextBuild, async (hookCtx) => {
-			lastMessages = hookCtx.messages;
+			const lazyCtx = hookCtx as HookContext<"context:build"> & {
+				transcript?: TranscriptReader;
+			};
+			lastReader = lazyCtx.transcript;
+			lastMessages = lazyCtx.messages ?? [];
 
 			const state = await ctx.store.get<RollingState>(STATE_KEY);
-			if (!state?.summary || state.summarizedCount <= 0) return;
+			const upto = state?.summary ? summarizedUpto(state) : 0;
+			const tail = await readTail(lazyCtx, upto);
 
-			// Drop the summarized prefix; keep the rest verbatim. Clamp defensively
-			// in case the visible history is shorter than the recorded mark.
-			const drop = Math.min(state.summarizedCount, hookCtx.messages.length);
-			const kept = hookCtx.messages.slice(drop);
+			if (!state?.summary || upto <= 0) {
+				// Nothing summarized yet, nothing to prune. A lazy host did not push
+				// `messages`, so the window is what we just read from the path.
+				return lazyCtx.messages === undefined
+					? { action: "continue" as const, mutations: { messages: tail } }
+					: undefined;
+			}
 
+			// Drop the summarized prefix; keep the tail verbatim.
 			return {
 				action: "continue" as const,
 				mutations: {
 					system: `${hookCtx.system}\n\n<conversation-summary>\n${state.summary}\n</conversation-summary>`,
-					messages: kept,
+					messages: tail,
 				},
 			};
 		});
 
-		ctx.hook(LifecycleEvent.TurnEnd, async () => {
-			const state = (await ctx.store.get<RollingState>(STATE_KEY)) ?? {
-				summary: "",
-				summarizedCount: 0,
-			};
+		const rollForward = async () => {
+			const state = (await ctx.store.get<RollingState>(STATE_KEY)) ?? { summary: "" };
+			const upto = summarizedUpto(state);
 
 			// Only the not-yet-summarized tail counts toward the window budget.
-			const tail = lastMessages.slice(state.summarizedCount);
+			const tail = lastReader
+				? await lastReader.read({ fromSeq: upto + 1 })
+				: lastMessages.filter((message, position) => seqAt(message, position) > upto);
 			if (estimateTokens(tail) < threshold) return;
 
 			// Fold everything older than the most recent `keepRecent` messages, but
 			// snap the boundary so we never split a tool call from its result.
-			const targetCount = safeDropCount(lastMessages, lastMessages.length - keepRecent);
-			if (targetCount <= state.summarizedCount) return; // nothing new aged out yet
-
-			const toFold = lastMessages.slice(state.summarizedCount, targetCount);
-			if (toFold.length === 0) return;
+			const dropCount = safeDropCount(tail, tail.length - keepRecent);
+			if (dropCount <= 0) return; // nothing new aged out yet
+			const toFold = tail.slice(0, dropCount);
+			const targetSeq = seqAt(toFold[toFold.length - 1], upto + dropCount - 1);
 
 			const conversation = toFold.map(renderMessage).join("\n");
 			const prior = state.summary ? `Existing summary so far:\n${state.summary}\n\n` : "";
@@ -159,14 +210,19 @@ export default definePlugin({
 
 				await ctx.store.set<RollingState>(STATE_KEY, {
 					summary: next,
-					summarizedCount: targetCount,
+					summarizedUptoSeq: targetSeq,
 				});
 				ctx.log.info(
-					`Compacted ${toFold.length} message(s); window now ~${keepRecent} recent + summary`,
+					`Compacted ${toFold.length} message(s) up to seq ${targetSeq}; window now ~${keepRecent} recent + summary`,
 				);
 			} catch {
 				ctx.log.warn("Memory compaction skipped — model capability unavailable");
 			}
-		});
+		};
+
+		// Step boundaries too: a long agentic turn must not blow the window
+		// between turn ends. Cheap when under threshold (one estimate, no model).
+		ctx.hook(LifecycleEvent.StepEnd, rollForward);
+		ctx.hook(LifecycleEvent.TurnEnd, rollForward);
 	},
 });
