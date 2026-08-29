@@ -126,6 +126,12 @@ export interface PluginManifest {
 	 */
 	consumes?: {
 		invocationContext?: boolean;
+		/**
+		 * `"lazy"`: this plugin reads history through `hookCtx.transcript` and does
+		 * not need the full `messages` array pushed on every hook dispatch. The host
+		 * drops the eager push for an event only when every subscriber declared it.
+		 */
+		transcript?: "lazy";
 	};
 	execution?: {
 		snapshot?: {
