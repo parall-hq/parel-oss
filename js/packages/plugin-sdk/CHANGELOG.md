@@ -1,5 +1,13 @@
 # @parel/plugin-sdk
 
+## 0.15.1
+
+### Patch Changes
+
+- cd3b975: Re-export `TranscriptReader` and `TranscriptReadRange` for plugins reading history through `hookCtx.transcript`.
+- Updated dependencies [cd3b975]
+  - @parel/core@0.16.0
+
 ## 0.15.0
 
 ### Minor Changes
