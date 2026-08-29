@@ -6,5 +6,8 @@
       "store": "copy",
       "sideEffects": "reference"
     }
+  },
+  "consumes": {
+    "transcript": "lazy"
   }
 }
