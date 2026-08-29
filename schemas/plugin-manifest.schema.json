@@ -76,9 +76,10 @@
     },
     "consumes": {
       "type": "object",
-      "description": "Opt-in consumption declarations. invocationContext:true lets this plugin receive the per-turn invocation context on its tool contexts (ToolHandlerContext). Default off; declaring it is treated as authorization. Hook-context delivery is a later phase. Design: docs/invocation-context.md.",
+      "description": "Opt-in consumption declarations. invocationContext:true lets this plugin receive the per-turn invocation context on its tool contexts (ToolHandlerContext). transcript:\"lazy\" declares that the plugin reads history through hookCtx.transcript by range instead of receiving the full messages array on every hook dispatch. Default off; declaring is treated as authorization. Design: docs/invocation-context.md, docs/transcript-reader.md.",
       "properties": {
-        "invocationContext": { "type": "boolean" }
+        "invocationContext": { "type": "boolean" },
+        "transcript": { "type": "string", "enum": ["lazy"] }
       },
       "additionalProperties": false
     },
