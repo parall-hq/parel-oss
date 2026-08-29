@@ -94,11 +94,38 @@ export interface HookEventMap {
 
 // --- Typed HookContext ---
 
+/** Inclusive path-coordinate range for a transcript read; every field optional (default: the whole path). */
+export interface TranscriptReadRange {
+	fromSeq?: number;
+	toSeq?: number;
+	limit?: number;
+}
+
+/**
+ * Read-only handle over the session's transcript path, delivered on hook
+ * contexts as `hookCtx.transcript`. It is the hook's INPUT, not a capability:
+ * the host owns the rows (and where they live); a plugin only ever reads. A
+ * plugin that declares `consumes.transcript: "lazy"` pulls what it needs here
+ * instead of receiving the full `messages` array on every dispatch.
+ * `generation` moves only when the live tail was rewritten (never on ordinary
+ * appends), so a caching plugin knows when to drop its copy.
+ */
+export interface TranscriptReader {
+	read(range?: TranscriptReadRange): Promise<Message[]>;
+	readonly generation: number;
+}
+
 interface HookContextBase {
 	session: Readonly<SessionState>;
 	store: SessionStore;
 	inputs: InputQueue;
 	tools: HookToolOps;
+	/**
+	 * Transcript read handle (see {@link TranscriptReader}). Present on hosts that
+	 * serve the transcript reader; absent on older hosts — a lazy plugin must
+	 * degrade honestly when it is missing.
+	 */
+	transcript?: TranscriptReader;
 	// NOTE: per-turn invocation context on hook contexts (for policy/channel plugins)
 	// lands in P1, together with host-side per-hook gated delivery — not exposed here
 	// until that path is wired. Design: docs/invocation-context.md §10.
