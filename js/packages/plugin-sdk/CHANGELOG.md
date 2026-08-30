@@ -1,5 +1,13 @@
 # @parel/plugin-sdk
 
+## 0.15.2
+
+### Patch Changes
+
+- d9cd885: Re-export `HookTurnInfo` for plugins reading `hookCtx.turn`.
+- Updated dependencies [d9cd885]
+  - @parel/core@0.17.0
+
 ## 0.15.1
 
 ### Patch Changes
