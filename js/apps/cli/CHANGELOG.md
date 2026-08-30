@@ -1,5 +1,13 @@
 # @parel/cli
 
+## 0.5.3
+
+### Patch Changes
+
+- d9cd885: `parel steer` help text: it sends a message into the running turn (alias for `POST /messages` with `injectInFlight: true`), seen by the model at the next step and kept in the transcript.
+- Updated dependencies [d9cd885]
+  - @parel/core@0.17.0
+
 ## 0.5.2
 
 ### Patch Changes
