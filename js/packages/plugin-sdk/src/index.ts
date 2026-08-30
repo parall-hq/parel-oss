@@ -32,6 +32,7 @@ export type {
 	HookOptions,
 	HookResult,
 	HookToolOps,
+	HookTurnInfo,
 	ImagePart,
 	InputQueue,
 	InputQueueItem,
