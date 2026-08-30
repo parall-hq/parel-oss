@@ -115,6 +115,23 @@ export interface TranscriptReader {
 	readonly generation: number;
 }
 
+/**
+ * Turn-scoped facts the host attaches to every hook context of a step: which
+ * turn/step the hook runs in, which inputs the turn has consumed so far, and
+ * which of them were absorbed at THIS step boundary (a message delivered into
+ * the turn in flight). Observation only — it never changes dispatch. `step:start`
+ * is therefore the hook that fires right after something was absorbed.
+ */
+export interface HookTurnInfo {
+	turnId: string;
+	/** The step this hook runs in (1 on turn:start). */
+	stepNumber?: number;
+	/** Input ids consumed by this turn so far (turn-start inputs, then absorbed ones), in consumption order. */
+	inputIds: string[];
+	/** Inputs absorbed at this step boundary; empty otherwise. */
+	absorbed: { inputId: string; messageId: string }[];
+}
+
 interface HookContextBase {
 	session: Readonly<SessionState>;
 	store: SessionStore;
@@ -126,6 +143,11 @@ interface HookContextBase {
 	 * degrade honestly when it is missing.
 	 */
 	transcript?: TranscriptReader;
+	/**
+	 * Turn block (see {@link HookTurnInfo}). Present on hosts that attach it;
+	 * absent on older hosts and outside a turn.
+	 */
+	turn?: HookTurnInfo;
 	// NOTE: per-turn invocation context on hook contexts (for policy/channel plugins)
 	// lands in P1, together with host-side per-hook gated delivery — not exposed here
 	// until that path is wired. Design: docs/invocation-context.md §10.

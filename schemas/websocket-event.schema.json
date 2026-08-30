@@ -35,6 +35,9 @@
       "$ref": "#/$defs/turnEnd"
     },
     {
+      "$ref": "#/$defs/inputAbsorbed"
+    },
+    {
       "$ref": "#/$defs/error"
     }
   ],
@@ -310,6 +313,36 @@
         },
         "state": {
           "$ref": "#/$defs/sessionState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "inputAbsorbed": {
+      "description": "An input was delivered into the turn in flight: it became a transcript message of this turn at the given step boundary (POST /messages with injectInFlight, or a same-conversation channel event under a binding's injectInFlight).",
+      "type": "object",
+      "required": [
+        "type",
+        "inputId",
+        "messageId",
+        "turnId",
+        "stepNumber"
+      ],
+      "properties": {
+        "type": {
+          "const": "input_absorbed"
+        },
+        "inputId": {
+          "type": "string"
+        },
+        "messageId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        },
+        "stepNumber": {
+          "type": "integer",
+          "minimum": 1
         }
       },
       "additionalProperties": false

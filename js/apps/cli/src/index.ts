@@ -2523,7 +2523,11 @@ const logs = defineCommand({
 // ── Commands: steer ─────────────────────────────────────────────────
 
 const steer = defineCommand({
-	meta: { name: "steer", description: "Steer a running session" },
+	meta: {
+		name: "steer",
+		description:
+			"Send a message into the running turn (seen at the next step; alias for POST /messages with injectInFlight)",
+	},
 	args: {
 		session: { type: "string", required: true },
 		message: { type: "positional", required: true },
