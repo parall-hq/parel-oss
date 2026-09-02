@@ -1,5 +1,13 @@
 # @parel/cli
 
+## 0.5.4
+
+### Patch Changes
+
+- 245ec13: `parel chat` renders slash-command outcomes (`command_result`), returns to the prompt after an inline command (`message_ack.status: "executed"`), and surfaces `unknown_command` warnings.
+- Updated dependencies [245ec13]
+  - @parel/core@0.18.0
+
 ## 0.5.3
 
 ### Patch Changes
