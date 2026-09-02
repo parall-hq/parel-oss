@@ -1,5 +1,12 @@
 # @parel/subagent
 
+## 0.4.15
+
+### Patch Changes
+
+- Updated dependencies [245ec13]
+  - @parel/plugin-sdk@0.16.0
+
 ## 0.4.14
 
 ### Patch Changes

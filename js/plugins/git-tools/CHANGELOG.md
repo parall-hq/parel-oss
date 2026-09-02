@@ -1,5 +1,13 @@
 # @parel/git-tools
 
+## 0.1.20
+
+### Patch Changes
+
+- Updated dependencies [245ec13]
+  - @parel/plugin-sdk@0.16.0
+  - @parel/workspace@0.2.8
+
 ## 0.1.19
 
 ### Patch Changes
