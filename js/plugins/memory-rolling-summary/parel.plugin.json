@@ -2,9 +2,7 @@
   "name": "@parel/memory-rolling-summary",
   "version": "0.1.2",
   "provides": {
-    "commands": [
-      "compact"
-    ]
+    "commands": ["compact"]
   },
   "execution": {
     "snapshot": {

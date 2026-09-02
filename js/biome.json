@@ -15,8 +15,7 @@
         "noAutofocus": "off"
       },
       "suspicious": {
-        "noArrayIndexKey": "off",
-        "noTemplateCurlyInString": "off"
+        "noArrayIndexKey": "off"
       }
     }
   },
