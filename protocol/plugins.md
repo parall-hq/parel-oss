@@ -48,8 +48,50 @@ Plugins receive a `PluginContext` with:
 | `model` | Access to the configured model gateway. |
 | `hook` | Register lifecycle hooks. |
 | `tool` | Register tools callable by the model. |
+| `command` | Register a slash command the user can type (`/name args`). Optional on older hosts. See [Slash Commands](#slash-commands). |
 | `provide` / `require` | Capability registry. |
 | `interrupt` | Request session interruption. |
+
+## Slash Commands
+
+A user message that starts with `/name` (optionally followed by whitespace and
+free-form arguments) is dispatched to the plugin that registered `name` instead
+of being materialized into the transcript. The host recognizes a command name
+only when the plugin's static manifest declares it:
+
+```json
+{ "provides": { "commands": ["compact"] } }
+```
+
+```ts
+async setup(ctx) {
+  ctx.command?.(
+    { name: "compact", description: "Fold older history into the summary", args: { description: "focus" } },
+    async (args, commandCtx) => {
+      // args: everything after the name, trimmed; commandCtx.transcript: read-only history.
+      return { reply: "Compacted 12 messages." };
+    },
+  );
+}
+```
+
+Rules:
+
+- Declaration is authorization: a `ctx.command` registration whose name is not
+  in `provides.commands` fails plugin setup. Names are `[a-z][a-z0-9_-]*` and
+  unique across the plugin graph.
+- Commands run at a turn boundary, never inside a turn: when the session is idle
+  the command runs immediately; while a turn is running it waits in the input
+  queue in order with the messages around it. Delivery is at-least-once, so a
+  handler must tolerate re-execution.
+- `CommandResult.reply` is shown to the user and never reaches the model or the
+  transcript. `CommandResult.prompt` expands the command into the user message of
+  a new turn. A handler that throws (or exceeds the host's execution budget) is
+  reported to the user as a failed command.
+- Handlers reach the plugin's `store` and `model` through the setup closure like
+  hooks do; `commandCtx.transcript` is the same read handle hooks receive.
+- The host's only built-in command is `/help`, which lists the session's
+  commands. An unknown `/name` is delivered as an ordinary message.
 
 ## Instance-Scoped State
 

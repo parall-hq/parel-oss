@@ -100,9 +100,38 @@ Invalid config returns `400`:
 | `POST` | `/execution/snapshots/{snapshotId}/branches` | branch options | Create a branch session from a snapshot. |
 | `POST` | `/execution/snapshots/{snapshotId}/replays` | replay options | Create a replay session from a snapshot. |
 | `GET` | `/execution/branches/{branchId}` | none | Get an execution branch/replay record. |
-| `POST` | `/sessions/{sessionId}/messages` | `{ "content": string \| Part[] }` | Start an async turn. See [Media input](#media-input). |
+| `POST` | `/sessions/{sessionId}/messages` | `{ "content": string \| Part[] }` | Start an async turn, or run a slash command. See [Media input](#media-input), [Slash commands](#slash-commands). |
+| `GET` | `/sessions/{sessionId}/commands` | none | List the slash commands available in this session. |
 | `POST` | `/sessions/{sessionId}/steer` | `{ "content": "..." }` | Queue steering input. |
 | `GET` | `/sessions/{sessionId}/ws` | WebSocket subprotocol token | Open session WebSocket (see [websocket.md](websocket.md#authentication)). |
+
+## Slash Commands
+
+A string `content` of the form `/name [args]` names a slash command when `name`
+is one the session knows: the host's built-in `/help`, or a command a configured
+plugin declares (see [plugins.md](plugins.md#slash-commands)). Such a message is
+executed instead of starting a turn:
+
+```jsonc
+// POST /sessions/{sessionId}/messages  { "content": "/compact keep the billing decisions" }
+// session idle → the command ran inline:
+{ "status": "executed", "inputId": "inp_user_…", "command": { "name": "compact", "args": "keep the billing decisions" },
+  "result": { "ok": true, "reply": "Compacted 12 message(s) …", "durationMs": 1830 } }
+// a turn is running → the command waits its turn in the queue:
+{ "status": "queued", "inputId": "inp_user_…", "command": { "name": "compact", "args": "…" } }
+```
+
+- `result.ok: false` carries `error` and `code: "command_failed"`.
+- A command that expands into a prompt answers `status: "accepted"` with the
+  `turnId` of the turn it opened, plus `command`.
+- A `/name` the session does not know is delivered as an ordinary message; the
+  response carries a `warnings` entry with `code: "unknown_command"`.
+- `GET /sessions/{sessionId}/commands` returns
+  `[{ "name", "description", "args"?: { "description" }, "source": "host" | "<plugin package>" }]`
+  without starting a plugin runtime. `/help` renders the same list.
+- Slash commands never enter the transcript; their execution is recorded as
+  `command:start` / `command:end` events and the WebSocket `command_result` event.
+- A `/name` message never rides `injectInFlight`; commands run at turn boundaries only.
 
 ## Media Input
 

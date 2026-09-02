@@ -38,6 +38,9 @@
       "$ref": "#/$defs/inputAbsorbed"
     },
     {
+      "$ref": "#/$defs/commandResult"
+    },
+    {
       "$ref": "#/$defs/error"
     }
   ],
@@ -343,6 +346,54 @@
         "stepNumber": {
           "type": "integer",
           "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "commandResult": {
+      "description": "Outcome of a slash command typed by the user (`/name args`). Arrives once per command: right away when it ran inline (its message_ack then reports status \"executed\" and no turn_end follows), or after the turn it waited for. Never a transcript message.",
+      "type": "object",
+      "required": [
+        "type",
+        "inputId",
+        "name",
+        "args",
+        "ok",
+        "durationMs"
+      ],
+      "properties": {
+        "type": {
+          "const": "command_result"
+        },
+        "inputId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "args": {
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "reply": {
+          "type": "string",
+          "description": "Shown to the user; never reaches the model."
+        },
+        "error": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string",
+          "description": "Stable error code, e.g. command_failed."
+        },
+        "durationMs": {
+          "type": "number"
+        },
+        "turnId": {
+          "type": "string",
+          "description": "Set when the command expanded into a prompt and opened this turn."
         }
       },
       "additionalProperties": false

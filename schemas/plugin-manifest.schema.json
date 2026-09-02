@@ -30,6 +30,12 @@
           "items": { "type": "string" },
           "description": "Input types this plugin can normalize into transcript messages (e.g. \"async_callback\")."
         },
+        "commands": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$" },
+          "uniqueItems": true,
+          "description": "Slash commands this plugin registers via ctx.command (e.g. \"compact\"). Declaration is authorization: hosts recognize /name only for declared names."
+        },
         "capabilities": {
           "type": "array",
           "items": { "type": "string" }

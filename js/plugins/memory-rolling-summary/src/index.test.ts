@@ -1,10 +1,13 @@
 import type {
+	CommandContext,
+	CommandHandler,
 	HookHandler,
 	LifecycleEvent,
 	Message,
 	ModelGatewayAccess,
 	PluginContext,
 	SessionStore,
+	TranscriptReader,
 } from "@parel/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import memoryPlugin from "./index.js";
@@ -58,6 +61,7 @@ function makeHarness(opts: {
 	store?: SessionStore;
 }) {
 	const hooks = new Map<string, HookHandler<LifecycleEvent>>();
+	const commands = new Map<string, CommandHandler>();
 	const store = opts.store ?? makeStore();
 	const ctx = {
 		config: opts.config ?? {},
@@ -69,13 +73,16 @@ function makeHarness(opts: {
 			hooks.set(event, handler);
 		},
 		tool() {},
+		command(definition: { name: string }, handler: CommandHandler) {
+			commands.set(definition.name, handler);
+		},
 		provide() {},
 		require() {
 			throw new Error("not provided");
 		},
 		interrupt() {},
 	} as unknown as PluginContext;
-	return { ctx, hooks, store };
+	return { ctx, hooks, commands, store };
 }
 
 function msg(role: Message["role"], text: string): Message {
@@ -351,5 +358,75 @@ describe("@parel/memory-rolling-summary", () => {
 		} as never);
 		await h.hooks.get(turnEnd)?.({} as never);
 		expect(prompts).toHaveLength(0);
+	});
+});
+
+describe("/compact slash command", () => {
+	function reader(messages: Message[]): TranscriptReader {
+		return {
+			generation: 1,
+			async read(range) {
+				return messages.filter((message) => (message.seq ?? 0) >= (range?.fromSeq ?? 1));
+			},
+		};
+	}
+	function history(count: number): Message[] {
+		return Array.from({ length: count }, (_, index) => ({
+			seq: index + 1,
+			role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+			parts: [{ type: "text" as const, text: `message ${index + 1}`, visibility: "chat" as const }],
+		}));
+	}
+
+	it("registers /compact under the manifest-declared name", async () => {
+		const { ctx, commands } = makeHarness({});
+		await memoryPlugin.setup(ctx);
+		expect(memoryPlugin.provides).toEqual({ commands: ["compact"] });
+		expect([...commands.keys()]).toEqual(["compact"]);
+	});
+
+	it("folds on demand below the threshold, keeps the recent window, and steers with the focus text", async () => {
+		const prompts: string[] = [];
+		const { ctx, commands, store } = makeHarness({
+			config: { keep_recent_messages: 4, max_context_tokens: 1_000_000 },
+			model: fakeModel("SUMMARY", prompts),
+		});
+		await memoryPlugin.setup(ctx);
+		const compact = commands.get("compact") as CommandHandler;
+		const commandCtx = {
+			session: {},
+			store,
+			log: ctx.log,
+			transcript: reader(history(10)),
+		} as unknown as CommandContext;
+
+		const result = await compact("billing decisions", commandCtx);
+
+		expect(result).toEqual({
+			reply: "Compacted 6 message(s) into the summary; the last 4 stay verbatim.",
+		});
+		expect(prompts).toHaveLength(1);
+		expect(prompts[0]).toContain("message 6");
+		expect(prompts[0]).not.toContain("message 7");
+		expect(prompts[0]).toContain("preserving anything related to: billing decisions");
+		await expect(store.get("rolling_summary")).resolves.toEqual({
+			summary: "SUMMARY",
+			summarizedUptoSeq: 6,
+		});
+
+		// Nothing new has aged out: the second run is a no-op with an honest reply.
+		await expect(compact("", commandCtx)).resolves.toEqual({
+			reply: "Nothing to compact: fewer than 4 messages beyond the summary.",
+		});
+		expect(prompts).toHaveLength(1);
+	});
+
+	it("fails honestly without a transcript reader", async () => {
+		const { ctx, commands, store } = makeHarness({});
+		await memoryPlugin.setup(ctx);
+		const compact = commands.get("compact") as CommandHandler;
+		await expect(
+			compact("", { session: {}, store, log: ctx.log } as unknown as CommandContext),
+		).rejects.toThrow(/transcript reader/);
 	});
 });

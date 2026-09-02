@@ -112,12 +112,27 @@ Error:
 { "type": "error", "error": "Container error: ..." }
 ```
 
+Slash command outcome (see [http-api.md](http-api.md#slash-commands)). A command
+that ran inline is acknowledged with `message_ack.status: "executed"` and no
+`turn_end` follows; one that waited for a running turn reports later. Either way
+the outcome arrives as one `command_result`:
+
+```json
+{ "type": "message_ack", "status": "executed", "inputId": "inp_user_…", "command": { "name": "compact", "args": "" }, "result": { "ok": true, "reply": "Compacted 12 message(s) …", "durationMs": 1830 } }
+{ "type": "command_result", "inputId": "inp_user_…", "name": "compact", "args": "", "ok": true, "reply": "Compacted 12 message(s) …", "durationMs": 1830 }
+```
+
+A failed command carries `ok: false`, `error` and `code: "command_failed"`. A
+`message_ack` for an unrecognized `/name` carries a `warnings` entry with
+`code: "unknown_command"`; the text was delivered as an ordinary message.
+
 ## Ordering
 
 For one client message, servers emit zero or more stream events followed by exactly one terminal event:
 
 - `turn_end` for a completed or finalized turn.
 - `error` may appear before `turn_end` when a turn fails but the session can still be finalized.
+- `message_ack` with `status: "executed"` for a slash command that ran without a turn (its `command_result` precedes it); no `turn_end` follows.
 
 Clients should keep reading until `turn_end` before considering the turn complete.
 
