@@ -15,6 +15,9 @@ import manifest from "../parel.plugin.json" with { type: "json" };
 //                   model call, and advance the high-water mark. Checking at step
 //                   boundaries too means a long agentic turn cannot blow the
 //                   window between turn ends.
+//  - /compact       The same fold, on demand and regardless of the threshold,
+//    [focus]        typed by the user into the session (slash command). An
+//                   optional focus text steers what the summary keeps.
 //
 // Coordinates are transcript PATH coordinates (`message.seq`), not array
 // positions: a pointer-forked session's path continues its parent's seqs, so a
@@ -105,6 +108,7 @@ async function readTail(
 
 export default definePlugin({
 	name: "@parel/memory-rolling-summary",
+	provides: manifest.provides as ParelPlugin["provides"],
 	execution: manifest.execution as ParelPlugin["execution"],
 	consumes: manifest.consumes as ParelPlugin["consumes"],
 
@@ -160,61 +164,80 @@ export default definePlugin({
 			};
 		});
 
-		const rollForward = async () => {
+		/**
+		 * Fold everything older than the recent window into the running summary.
+		 * `force` skips the budget check (the /compact command); `focus` steers
+		 * what the summary keeps. Reads the tail through `source` — the last
+		 * context:build's view for the hooks, the command's own reader for /compact.
+		 * Returns what was folded, or null when nothing has aged out yet. Throws
+		 * when the model call fails so a caller can report it honestly.
+		 */
+		const fold = async (
+			source: { reader?: TranscriptReader; messages: Message[] },
+			opts: { force?: boolean; focus?: string } = {},
+		): Promise<{ folded: number; uptoSeq: number } | null> => {
 			const state = (await ctx.store.get<RollingState>(STATE_KEY)) ?? { summary: "" };
 			const upto = summarizedUpto(state);
 
 			// Only the not-yet-summarized tail counts toward the window budget.
-			const tail = lastReader
-				? await lastReader.read({ fromSeq: upto + 1 })
-				: lastMessages.filter((message, position) => seqAt(message, position) > upto);
-			if (estimateTokens(tail) < threshold) return;
+			const tail = source.reader
+				? await source.reader.read({ fromSeq: upto + 1 })
+				: source.messages.filter((message, position) => seqAt(message, position) > upto);
+			if (!opts.force && estimateTokens(tail) < threshold) return null;
 
 			// Fold everything older than the most recent `keepRecent` messages, but
 			// snap the boundary so we never split a tool call from its result.
 			const dropCount = safeDropCount(tail, tail.length - keepRecent);
-			if (dropCount <= 0) return; // nothing new aged out yet
+			if (dropCount <= 0) return null; // nothing new aged out yet
 			const toFold = tail.slice(0, dropCount);
 			const targetSeq = seqAt(toFold[toFold.length - 1], upto + dropCount - 1);
 
 			const conversation = toFold.map(renderMessage).join("\n");
 			const prior = state.summary ? `Existing summary so far:\n${state.summary}\n\n` : "";
+			const focus = opts.focus
+				? `Pay particular attention to preserving anything related to: ${opts.focus}\n`
+				: "";
 
+			let next = "";
+			for await (const chunk of ctx.model.chat({
+				messages: [
+					{
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text:
+									`You maintain a running summary of a long agent conversation.\n${prior}` +
+									`New messages to fold into the summary:\n${conversation}\n\n` +
+									"Rewrite the summary so it stays concise but preserves key decisions, " +
+									"established facts, constraints, open questions, and pending action items. " +
+									`${focus}Output only the updated summary.`,
+								visibility: "chat",
+							},
+						],
+					},
+				],
+				maxTokens: 2000,
+			})) {
+				if (chunk.type === "text_delta" && chunk.text) next += chunk.text;
+			}
+
+			next = next.trim();
+			if (!next) return null; // keep prior state rather than wipe the summary
+
+			await ctx.store.set<RollingState>(STATE_KEY, {
+				summary: next,
+				summarizedUptoSeq: targetSeq,
+			});
+			ctx.log.info(
+				`Compacted ${toFold.length} message(s) up to seq ${targetSeq}; window now ~${keepRecent} recent + summary`,
+			);
+			return { folded: toFold.length, uptoSeq: targetSeq };
+		};
+
+		const rollForward = async () => {
 			try {
-				let next = "";
-				for await (const chunk of ctx.model.chat({
-					messages: [
-						{
-							role: "user",
-							parts: [
-								{
-									type: "text",
-									text:
-										`You maintain a running summary of a long agent conversation.\n${prior}` +
-										`New messages to fold into the summary:\n${conversation}\n\n` +
-										"Rewrite the summary so it stays concise but preserves key decisions, " +
-										"established facts, constraints, open questions, and pending action items. " +
-										"Output only the updated summary.",
-									visibility: "chat",
-								},
-							],
-						},
-					],
-					maxTokens: 2000,
-				})) {
-					if (chunk.type === "text_delta" && chunk.text) next += chunk.text;
-				}
-
-				next = next.trim();
-				if (!next) return; // keep prior state rather than wipe the summary
-
-				await ctx.store.set<RollingState>(STATE_KEY, {
-					summary: next,
-					summarizedUptoSeq: targetSeq,
-				});
-				ctx.log.info(
-					`Compacted ${toFold.length} message(s) up to seq ${targetSeq}; window now ~${keepRecent} recent + summary`,
-				);
+				await fold({ reader: lastReader, messages: lastMessages });
 			} catch {
 				ctx.log.warn("Memory compaction skipped — model capability unavailable");
 			}
@@ -224,5 +247,32 @@ export default definePlugin({
 		// between turn ends. Cheap when under threshold (one estimate, no model).
 		ctx.hook(LifecycleEvent.StepEnd, rollForward);
 		ctx.hook(LifecycleEvent.TurnEnd, rollForward);
+
+		// `/compact [focus]`: fold now, whatever the budget says. Runs outside a
+		// turn, so the history comes from the command's own transcript reader, not
+		// from a context:build this runtime may never have seen. Optional on hosts
+		// that predate slash commands.
+		ctx.command?.(
+			{
+				name: "compact",
+				description: "Fold older history into the running summary now",
+				args: { description: "focus" },
+			},
+			async (args, commandCtx) => {
+				if (!commandCtx.transcript) {
+					throw new Error("/compact needs the transcript reader, which this host does not serve");
+				}
+				const focus = args.trim();
+				const outcome = await fold(
+					{ reader: commandCtx.transcript, messages: [] },
+					{ force: true, ...(focus ? { focus } : {}) },
+				);
+				return {
+					reply: outcome
+						? `Compacted ${outcome.folded} message(s) into the summary; the last ${keepRecent} stay verbatim.`
+						: `Nothing to compact: fewer than ${keepRecent} messages beyond the summary.`,
+				};
+			},
+		);
 	},
 });

@@ -2313,7 +2313,7 @@ const chat = defineCommand({
 
 		console.log(`\n${c.bold("  PAREL Chat")}`);
 		console.log(c.dim(`  session: ${sessionId}`));
-		console.log(c.dim("  /quit to exit, /messages for log\n"));
+		console.log(c.dim("  /quit to exit, /messages for log, /help for the agent's commands\n"));
 
 		const wsUrl = server.replace("https://", "wss://").replace("http://", "ws://");
 		let ws: WebSocket;
@@ -2404,6 +2404,35 @@ const chat = defineCommand({
 							process.stdout.write("\n\n");
 							rl.prompt();
 							break;
+						case "command_result": {
+							// A slash command's outcome (server-side; docs: slash-commands).
+							// Arrives before the executed ack for an inline command, or
+							// after the running turn for a queued one.
+							const name = String(event.name ?? "");
+							const text = String(event.reply ?? event.error ?? "");
+							const label = event.ok ? c.dim(`  [/${name}]`) : c.red(`  [/${name} failed]`);
+							process.stdout.write(`\n${label}${text ? ` ${text}` : ""}\n`);
+							break;
+						}
+						case "message_ack": {
+							const warnings = Array.isArray(event.warnings)
+								? (event.warnings as { code?: string; message?: string }[])
+								: [];
+							for (const warning of warnings) {
+								if (warning.code === "unknown_command" && warning.message) {
+									process.stdout.write(`\n${c.yellow(`  ${warning.message}`)}\n`);
+								}
+							}
+							// An inline slash command has no turn, so no turn_end follows.
+							if (event.status === "executed") {
+								clearTimer();
+								busy = false;
+								hasOutput = false;
+								process.stdout.write("\n");
+								rl.prompt();
+							}
+							break;
+						}
 						case "error":
 							clearTimer();
 							console.error(
