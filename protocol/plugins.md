@@ -77,9 +77,10 @@ async setup(ctx) {
 
 Rules:
 
-- Declaration is authorization: a `ctx.command` registration whose name is not
-  in `provides.commands` fails plugin setup. Names are `[a-z][a-z0-9_-]*` and
-  unique across the plugin graph.
+- Declaration is authorization: hosts recognize `/name` only for names in the
+  manifest's `provides.commands`. A `ctx.command` registration outside that list
+  is unreachable — hosts log a warning and ignore it (the in-process reference
+  loader throws). Names are `[a-z][a-z0-9_-]*` and unique across the plugin graph.
 - Commands run at a turn boundary, never inside a turn: when the session is idle
   the command runs immediately; while a turn is running it waits in the input
   queue in order with the messages around it. Delivery is at-least-once, so a
