@@ -1,5 +1,14 @@
 # @parel/sandbox-e2b
 
+## 0.8.4
+
+### Patch Changes
+
+- 5b010a3: Prevent destructive recovery from E2B reconnect failures. Every reconnect
+  error, including an explicit not-found response, now retries briefly and then
+  fails without creating a replacement, changing the stored sandbox id, or
+  deleting the old sandbox.
+
 ## 0.8.3
 
 ### Patch Changes
