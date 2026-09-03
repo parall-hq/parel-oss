@@ -24,6 +24,11 @@ import manifest from "../parel.plugin.json" with { type: "json" };
 const STORE_KEY = "e2b_sandbox_id";
 const PROCESS_STORE_PREFIX = "e2b_process:";
 const PORT_STORE_PREFIX = "e2b_port:";
+const RECONNECT_RETRY_DELAYS_MS = [250, 1_000] as const;
+
+function wait(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * Flatten a per-turn invocation context into string env vars for a single command
@@ -384,26 +389,37 @@ export default definePlugin({
 			return s;
 		}
 
-		async function reconnectSandbox(sandboxId: string): Promise<Sandbox | null> {
+		async function reconnectSandbox(sandboxId: string): Promise<Sandbox> {
 			// For a PAUSED sandbox (persistence mode) connect() transparently
 			// resumes it — with keepMemory=false that's a cold boot from the
 			// filesystem snapshot (a few seconds), with keepMemory=true a warm
-			// ~1s memory restore. Giving up swaps in a blank filesystem (see
-			// acquireSandbox), so retry once: a transient network blip must not
-			// cost the user their files.
-			for (let attempt = 1; attempt <= 2; attempt++) {
+			// ~1s memory restore. Recovery is deliberately fail-closed: no reconnect
+			// error, including an explicit not-found, may replace or delete the stored
+			// sandbox. Transient errors get short retries; the final error preserves
+			// the handle so an operator or a later attempt can recover it.
+			const attempts = RECONNECT_RETRY_DELAYS_MS.length + 1;
+			let lastError: unknown;
+			for (let attempt = 1; attempt <= attempts; attempt++) {
 				try {
 					const s = await Sandbox.connect(sandboxId, { apiKey });
 					ctx.log.info(`Reconnected to E2B sandbox: ${sandboxId}`);
 					return s;
 				} catch (err: unknown) {
-					const msg = err instanceof Error ? err.message : "Unknown error";
+					lastError = err;
+					const name = err instanceof Error ? err.name || "Error" : "NonErrorThrown";
+					const message = err instanceof Error ? err.message : String(err);
 					ctx.log.warn(
-						`Failed to reconnect to sandbox ${sandboxId} (attempt ${attempt}/2): ${msg}`,
+						`Failed to reconnect to sandbox ${sandboxId} (attempt ${attempt}/${attempts}); preserving its stored handle: ${name}: ${message}`,
 					);
+					if (attempt < attempts) await wait(RECONNECT_RETRY_DELAYS_MS[attempt - 1]);
 				}
 			}
-			return null;
+			const name = lastError instanceof Error ? lastError.name || "Error" : "NonErrorThrown";
+			const message = lastError instanceof Error ? lastError.message : String(lastError);
+			throw new Error(
+				`Failed to reconnect to E2B sandbox ${sandboxId} after ${attempts} attempts; automatic replacement and deletion are disabled, and its stored handle and filesystem were preserved. Retry later. Last error: ${name}: ${message}`,
+				{ cause: lastError },
+			);
 		}
 
 		async function killSandboxById(sandboxId: string): Promise<boolean> {
@@ -446,13 +462,7 @@ export default definePlugin({
 			if (!legacy) return;
 			const authoritative = await istore.get<string>(STORE_KEY);
 			if (!authoritative) {
-				const reconnected = await reconnectSandbox(legacy);
-				if (!reconnected) {
-					// Dead handle — nothing to promote or reap.
-					await ctx.store.delete(STORE_KEY);
-					await moveLegacyRecords(false);
-					return;
-				}
+				await reconnectSandbox(legacy);
 				if (await istore.cas(STORE_KEY, null, legacy)) {
 					await ctx.store.delete(STORE_KEY);
 					await moveLegacyRecords(true);
@@ -472,9 +482,9 @@ export default definePlugin({
 		// Instance mode: acquire the ONE sandbox shared by every session of this
 		// agent instance. The authoritative handle lives in the instance store;
 		// all mutations go through cas() because sibling sessions' turns race
-		// here (two cold starts, or two sessions replacing an unreachable
-		// sandbox). The loser of any race kills its own orphan and adopts the
-		// winner's sandbox on the next pass.
+		// here during cold starts. A reconnect failure is surfaced without
+		// changing the authoritative handle. The loser of a cold-start race kills
+		// only the fresh sandbox it just created, then adopts the winner's sandbox.
 		async function acquireSharedSandbox(): Promise<Sandbox> {
 			if (!istore) throw new Error("acquireSharedSandbox requires an instance store");
 			await migrateLegacyHandle();
@@ -482,31 +492,10 @@ export default definePlugin({
 				const entry = await istore.get<string>(STORE_KEY);
 				if (entry) {
 					const reconnected = await reconnectSandbox(entry.value);
-					if (reconnected) {
-						// A sibling may have swapped the handle while we were
-						// reconnecting — the superseded sandbox can still answer
-						// connect() before the sibling's kill lands. Only adopt the
-						// handle if it is still authoritative; otherwise retry
-						// against the current one.
-						const current = await istore.get<string>(STORE_KEY);
-						if (current?.value === entry.value) return reconnected;
-						continue;
-					}
-					// Authoritative sandbox unreachable — replace it, guarded by the
-					// observed version so only one sibling wins the swap. Create the
-					// replacement FIRST (see the per-session path for why).
-					const fresh = await createRawSandbox();
-					if (await istore.cas(STORE_KEY, entry.version, fresh.sandboxId)) {
-						ctx.log.warn(
-							`E2B filesystem reset: sandbox ${entry.value} was unreachable, swapped in ${fresh.sandboxId} (files in the previous sandbox are lost)`,
-						);
-						await killSandboxById(entry.value);
-						// The replaced sandbox's processes/ports died with it.
-						await clearRecordsFor("sandbox replaced");
-						return fresh;
-					}
-					// A sibling already swapped in its replacement — discard ours.
-					await killSandboxById(fresh.sandboxId);
+					// The handle can change only during a cold-start publication or an
+					// explicit stop. Adopt it only while it remains authoritative.
+					const current = await istore.get<string>(STORE_KEY);
+					if (current?.value === entry.value) return reconnected;
 					continue;
 				}
 				const fresh = await createRawSandbox();
@@ -522,24 +511,7 @@ export default definePlugin({
 		// Per-session mode only; instance mode uses acquireSharedSandbox.
 		async function acquireSandbox(): Promise<Sandbox> {
 			const savedId = await ctx.store.get<string>(STORE_KEY);
-			if (savedId) {
-				const reconnected = await reconnectSandbox(savedId);
-				if (reconnected) return reconnected;
-				// The stored sandbox is unreachable — swap in a fresh one. Order
-				// matters: create the replacement FIRST. If creation fails (quota,
-				// outage) the store still points at the old snapshot, so a later
-				// attempt can reconnect once E2B recovers instead of having killed
-				// the user's files with nothing to replace them. Only once the
-				// replacement exists is the old sandbox reaped (best-effort) so its
-				// paused snapshot doesn't leak storage: after STORE_KEY is
-				// overwritten nothing else would ever kill it.
-				const fresh = await createSandbox();
-				ctx.log.warn(
-					`E2B filesystem reset: sandbox ${savedId} was unreachable, swapped in ${fresh.sandboxId} (files in the previous sandbox are lost)`,
-				);
-				await killSandboxById(savedId);
-				return fresh;
-			}
+			if (savedId) return reconnectSandbox(savedId);
 			return createSandbox();
 		}
 
@@ -563,11 +535,11 @@ export default definePlugin({
 			const cached = sandbox;
 			if (cached) {
 				if (!istore) return cached;
-				// Instance mode: a sibling session may have replaced the shared
-				// sandbox (unreachable → swap). A cached local handle would keep
-				// this session on the dead machine forever, silently splitting the
-				// instance's "one shared filesystem". One instance-store read per
-				// tool call is cheap next to the sandbox operation itself.
+				// Instance mode: a sibling or an explicit lifecycle action may have
+				// published a different shared handle. A cached local handle would
+				// silently split the instance's "one shared filesystem". One
+				// instance-store read per tool call is cheap next to the sandbox
+				// operation itself.
 				const authoritative = await istore.get<string>(STORE_KEY);
 				if (authoritative?.value === cached.sandboxId) return cached;
 				if (sandbox === cached) sandbox = null; // stale — re-acquire below

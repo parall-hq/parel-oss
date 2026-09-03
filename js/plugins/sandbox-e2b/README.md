@@ -58,6 +58,18 @@ Notes:
 - Requires an E2B account with sandbox persistence available (e2b JS SDK ≥ 2.x
   API surface; this plugin ships with `@e2b/code-interpreter` ^2.6).
 
+### Fail-closed reconnects
+
+The plugin never replaces or deletes a stored sandbox after a reconnect error,
+including an explicit `SandboxNotFoundError`. It retries briefly, preserves the
+stored sandbox id, and surfaces the error so an operator can investigate or
+recover the sandbox. A new sandbox is created automatically only when no stored
+sandbox id exists.
+
+Explicit lifecycle stops and cleanup of newly created cold-start race losers
+retain their existing behavior; the reconnect recovery path never calls
+`Sandbox.kill()`.
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).

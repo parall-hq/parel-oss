@@ -1,3 +1,4 @@
+import { SandboxNotFoundError } from "@e2b/code-interpreter";
 import { PAREL_SANDBOX_CAPABILITY, type SandboxCapability } from "@parel/capability-sandbox";
 import {
 	LifecycleEvent,
@@ -6,7 +7,7 @@ import {
 	type ToolDefinition,
 	type ToolHandler,
 } from "@parel/plugin-sdk";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SandboxPortsCapability, SandboxProcessCapability } from "./index.js";
 import sandboxE2bPlugin from "./index.js";
 
@@ -31,6 +32,16 @@ const FakeCommandExitError = vi.hoisted(
 		},
 );
 
+const FakeSandboxNotFoundError = vi.hoisted(
+	() =>
+		class FakeSandboxNotFoundError extends Error {
+			constructor(message: string) {
+				super(message);
+				this.name = "SandboxNotFoundError";
+			}
+		},
+);
+
 vi.mock("@e2b/code-interpreter", () => ({
 	Sandbox: {
 		create: sandboxMock.create,
@@ -38,6 +49,7 @@ vi.mock("@e2b/code-interpreter", () => ({
 		kill: sandboxMock.kill,
 	},
 	CommandExitError: FakeCommandExitError,
+	SandboxNotFoundError: FakeSandboxNotFoundError,
 }));
 
 interface Harness {
@@ -164,6 +176,10 @@ describe("@parel/sandbox-e2b", () => {
 		sandboxMock.create.mockReset();
 		sandboxMock.connect.mockReset();
 		sandboxMock.kill.mockReset();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
 	});
 
 	it("creates a real sandbox on session:start using config", async () => {
@@ -590,26 +606,28 @@ describe("@parel/sandbox-e2b", () => {
 			expect(sandboxMock.create).not.toHaveBeenCalled();
 		});
 
-		it("resume falls back to a fresh sandbox when the snapshot is gone", async () => {
-			const sandbox = makeSandbox();
-			sandboxMock.connect.mockRejectedValue(new Error("sandbox not found"));
-			sandboxMock.create.mockResolvedValue(sandbox);
-			sandboxMock.kill.mockResolvedValue(true);
+		it("reports an explicitly missing sandbox without replacing or deleting it", async () => {
+			vi.useFakeTimers();
+			sandboxMock.connect.mockRejectedValue(new SandboxNotFoundError("Sandbox sbx_gone not found"));
 			const h = makeHarness({ apiKey: "test-key", persistence: true });
 			await sandboxE2bPlugin.setup(h.ctx);
 			h.store.set("e2b_sandbox_id", "sbx_gone");
 
-			await h.hooks.get(LifecycleEvent.SessionResume)?.();
+			const resumed = h.hooks.get(LifecycleEvent.SessionResume)?.();
+			const rejection = expect(resumed).rejects.toThrow(
+				"automatic replacement and deletion are disabled",
+			);
+			await vi.runAllTimersAsync();
+			await rejection;
 
-			// One retry before giving up on the stored sandbox.
-			expect(sandboxMock.connect).toHaveBeenCalledTimes(2);
-			expect(sandboxMock.create).toHaveBeenCalledTimes(1);
-			// The unreachable sandbox is reaped so its paused snapshot can't leak.
-			expect(sandboxMock.kill).toHaveBeenCalledWith("sbx_gone", { apiKey: "test-key" });
-			expect(h.store.get("e2b_sandbox_id")).toBe("sbx_1");
+			expect(sandboxMock.connect).toHaveBeenCalledTimes(3);
+			expect(sandboxMock.create).not.toHaveBeenCalled();
+			expect(sandboxMock.kill).not.toHaveBeenCalled();
+			expect(h.store.get("e2b_sandbox_id")).toBe("sbx_gone");
 		});
 
-		it("resume retries a transient reconnect failure before swapping the sandbox", async () => {
+		it("resume retries a transient reconnect failure before succeeding", async () => {
+			vi.useFakeTimers();
 			const sandbox = makeSandbox();
 			sandboxMock.connect
 				.mockRejectedValueOnce(new Error("network blip"))
@@ -618,7 +636,9 @@ describe("@parel/sandbox-e2b", () => {
 			await sandboxE2bPlugin.setup(h.ctx);
 			h.store.set("e2b_sandbox_id", "sbx_flaky");
 
-			await h.hooks.get(LifecycleEvent.SessionResume)?.();
+			const resumed = h.hooks.get(LifecycleEvent.SessionResume)?.();
+			await vi.runAllTimersAsync();
+			await resumed;
 
 			expect(sandboxMock.connect).toHaveBeenCalledTimes(2);
 			// The filesystem was NOT reset: no fresh sandbox, no kill.
@@ -626,31 +646,43 @@ describe("@parel/sandbox-e2b", () => {
 			expect(sandboxMock.kill).not.toHaveBeenCalled();
 		});
 
-		it("does not kill the stored sandbox when its replacement fails to create", async () => {
-			sandboxMock.connect.mockRejectedValue(new Error("region outage"));
-			sandboxMock.create.mockRejectedValue(new Error("quota exceeded"));
+		it("never replaces on timeout, network, or generic errors", async () => {
+			vi.useFakeTimers();
+			sandboxMock.connect.mockRejectedValue(new Error("network timeout"));
 			const h = makeHarness({ apiKey: "test-key", persistence: true });
 			await sandboxE2bPlugin.setup(h.ctx);
-			h.store.set("e2b_sandbox_id", "sbx_saved");
+			h.store.set("e2b_sandbox_id", "sbx_preserved");
 
-			await expect(h.hooks.get(LifecycleEvent.SessionResume)?.()).rejects.toThrow(
-				"Failed to create E2B sandbox: quota exceeded",
+			const resumed = h.hooks.get(LifecycleEvent.SessionResume)?.();
+			const rejection = expect(resumed).rejects.toThrow(
+				"Failed to reconnect to E2B sandbox sbx_preserved after 3 attempts",
 			);
-			// The old snapshot must survive: kill only after a replacement exists,
-			// so a later attempt can still reconnect to the user's files.
-			expect(sandboxMock.kill).not.toHaveBeenCalled();
-			expect(h.store.get("e2b_sandbox_id")).toBe("sbx_saved");
+			await vi.runAllTimersAsync();
+			await rejection;
 
-			// E2B recovers: the next tool call reconnects and the files are intact.
-			const sandbox = makeSandbox();
-			sandbox.commands.run.mockResolvedValue({ exitCode: 0, stdout: "intact\n", stderr: "" });
-			sandboxMock.connect.mockReset();
-			sandboxMock.connect.mockResolvedValue(sandbox);
-			expect(await h.tools.get("bash")?.({ command: "ls" }, toolCtx)).toEqual({
-				content: "intact\n",
-				isError: false,
-			});
-			expect(sandboxMock.connect).toHaveBeenCalledWith("sbx_saved", { apiKey: "test-key" });
+			expect(sandboxMock.connect).toHaveBeenCalledTimes(3);
+			expect(sandboxMock.create).not.toHaveBeenCalled();
+			expect(sandboxMock.kill).not.toHaveBeenCalled();
+			expect(h.store.get("e2b_sandbox_id")).toBe("sbx_preserved");
+		});
+
+		it("does not trust a generic error message that merely says not found", async () => {
+			vi.useFakeTimers();
+			sandboxMock.connect.mockRejectedValue(new Error("sandbox not found"));
+			const h = makeHarness({ apiKey: "test-key", persistence: true });
+			await sandboxE2bPlugin.setup(h.ctx);
+			h.store.set("e2b_sandbox_id", "sbx_uncertain");
+
+			const resumed = h.hooks.get(LifecycleEvent.SessionResume)?.();
+			const rejection = expect(resumed).rejects.toThrow(
+				"stored handle and filesystem were preserved",
+			);
+			await vi.runAllTimersAsync();
+			await rejection;
+
+			expect(sandboxMock.create).not.toHaveBeenCalled();
+			expect(sandboxMock.kill).not.toHaveBeenCalled();
+			expect(h.store.get("e2b_sandbox_id")).toBe("sbx_uncertain");
 		});
 	});
 
@@ -674,20 +706,24 @@ describe("@parel/sandbox-e2b", () => {
 			expect(sandboxMock.create).not.toHaveBeenCalled();
 		});
 
-		it("hooks never ran and the stored sandbox is gone: the tool call swaps in a fresh one and reaps the old", async () => {
-			const sandbox = makeSandbox();
-			sandboxMock.connect.mockRejectedValue(new Error("sandbox not found"));
-			sandboxMock.create.mockResolvedValue(sandbox);
-			sandboxMock.kill.mockResolvedValue(true);
+		it("hooks never ran and reconnect fails: the tool call reports the error and preserves the id", async () => {
+			vi.useFakeTimers();
+			sandboxMock.connect.mockRejectedValue(new SandboxNotFoundError("Sandbox sbx_dead not found"));
 			const h = makeHarness({ apiKey: "test-key", persistence: true });
 			await sandboxE2bPlugin.setup(h.ctx);
 			h.store.set("e2b_sandbox_id", "sbx_dead");
 
-			await h.tools.get("file_write")?.({ path: "/tmp/x", content: "data" }, toolCtx);
+			const write = h.tools.get("file_write")?.({ path: "/tmp/x", content: "data" }, toolCtx);
+			const rejection = expect(write).rejects.toThrow(
+				"automatic replacement and deletion are disabled",
+			);
+			await vi.runAllTimersAsync();
+			await rejection;
 
-			expect(sandboxMock.kill).toHaveBeenCalledWith("sbx_dead", { apiKey: "test-key" });
-			expect(h.store.get("e2b_sandbox_id")).toBe("sbx_1");
-			expect(sandbox.files.write).toHaveBeenCalledWith("/tmp/x", "data");
+			expect(sandboxMock.connect).toHaveBeenCalledTimes(3);
+			expect(sandboxMock.create).not.toHaveBeenCalled();
+			expect(sandboxMock.kill).not.toHaveBeenCalled();
+			expect(h.store.get("e2b_sandbox_id")).toBe("sbx_dead");
 		});
 
 		it("hooks never ran and nothing is stored: a capability call creates the sandbox", async () => {
@@ -698,7 +734,7 @@ describe("@parel/sandbox-e2b", () => {
 			await sandboxE2bPlugin.setup(h.ctx);
 
 			const capability = h.provided.get(PAREL_SANDBOX_CAPABILITY) as SandboxCapability;
-			const result = await capability.process?.shell("echo hi");
+			const result = await capability.process?.shell?.("echo hi");
 			expect(result).toMatchObject({ stdout: "made\n", exitCode: 0 });
 			expect(sandboxMock.create).toHaveBeenCalledTimes(1);
 			expect(sandboxMock.connect).not.toHaveBeenCalled();
@@ -745,19 +781,25 @@ describe("@parel/sandbox-e2b", () => {
 			expect(sandboxMock.create).toHaveBeenCalledTimes(2);
 		});
 
-		it("a failed resume clears the stale pre-suspend handle so tools can self-heal later", async () => {
+		it("a transiently failed resume clears the stale handle and preserves the stored id", async () => {
+			vi.useFakeTimers();
 			const preSuspend = makeSandbox();
 			sandboxMock.create.mockResolvedValueOnce(preSuspend);
 			const h = makeHarness({ apiKey: "test-key", persistence: true });
 			await sandboxE2bPlugin.setup(h.ctx);
 			await h.hooks.get(LifecycleEvent.SessionStart)?.();
 
-			// Resume fails entirely: reconnect and replacement creation both down.
+			// Resume fails transiently: no replacement is attempted.
 			sandboxMock.connect.mockRejectedValue(new Error("region outage"));
-			sandboxMock.create.mockRejectedValueOnce(new Error("quota exceeded"));
-			await expect(h.hooks.get(LifecycleEvent.SessionResume)?.()).rejects.toThrow(
-				"Failed to create E2B sandbox: quota exceeded",
+			const resumed = h.hooks.get(LifecycleEvent.SessionResume)?.();
+			const rejection = expect(resumed).rejects.toThrow(
+				"stored handle and filesystem were preserved",
 			);
+			await vi.runAllTimersAsync();
+			await rejection;
+			expect(sandboxMock.create).toHaveBeenCalledTimes(1);
+			expect(sandboxMock.kill).not.toHaveBeenCalled();
+			expect(h.store.get("e2b_sandbox_id")).toBe("sbx_1");
 
 			// E2B recovers: the next tool call must not keep returning the stale
 			// pre-suspend handle — it re-runs the stored-id recovery instead.
@@ -948,21 +990,46 @@ describe("@parel/sandbox-e2b", () => {
 			expect(h.store.has("e2b_sandbox_id")).toBe(false);
 		});
 
-		it("replaces an unreachable shared sandbox via versioned cas", async () => {
+		it("preserves an explicitly missing shared sandbox id and reports the error", async () => {
+			vi.useFakeTimers();
 			const istore = makeInstanceStore();
 			await istore.set("e2b_sandbox_id", "sbx_dead");
-			sandboxMock.connect.mockResolvedValue(null);
-			sandboxMock.connect.mockRejectedValue(new Error("gone"));
-			const fresh = makeSandbox();
-			fresh.sandboxId = "sbx_fresh";
-			sandboxMock.create.mockResolvedValue(fresh);
+			sandboxMock.connect.mockRejectedValue(new SandboxNotFoundError("Sandbox sbx_dead not found"));
 
 			const h = makeHarness({ apiKey: "test-key" }, istore);
 			await sandboxE2bPlugin.setup(h.ctx);
-			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+			const started = h.hooks.get(LifecycleEvent.SessionStart)?.();
+			const rejection = expect(started).rejects.toThrow(
+				"automatic replacement and deletion are disabled",
+			);
+			await vi.runAllTimersAsync();
+			await rejection;
 
-			expect((await istore.get<string>("e2b_sandbox_id"))?.value).toBe("sbx_fresh");
-			expect(sandboxMock.kill).toHaveBeenCalledWith("sbx_dead", { apiKey: "test-key" });
+			expect(sandboxMock.connect).toHaveBeenCalledTimes(3);
+			expect(sandboxMock.create).not.toHaveBeenCalled();
+			expect(sandboxMock.kill).not.toHaveBeenCalled();
+			expect((await istore.get<string>("e2b_sandbox_id"))?.value).toBe("sbx_dead");
+		});
+
+		it("keeps the shared sandbox authoritative when reconnect fails transiently", async () => {
+			vi.useFakeTimers();
+			const istore = makeInstanceStore();
+			await istore.set("e2b_sandbox_id", "sbx_preserved");
+			sandboxMock.connect.mockRejectedValue(new Error("E2B 503"));
+
+			const h = makeHarness({ apiKey: "test-key" }, istore);
+			await sandboxE2bPlugin.setup(h.ctx);
+			const started = h.hooks.get(LifecycleEvent.SessionStart)?.();
+			const rejection = expect(started).rejects.toThrow(
+				"stored handle and filesystem were preserved",
+			);
+			await vi.runAllTimersAsync();
+			await rejection;
+
+			expect(sandboxMock.connect).toHaveBeenCalledTimes(3);
+			expect(sandboxMock.create).not.toHaveBeenCalled();
+			expect(sandboxMock.kill).not.toHaveBeenCalled();
+			expect((await istore.get<string>("e2b_sandbox_id"))?.value).toBe("sbx_preserved");
 		});
 
 		it("explicit lifecycle.stop kills the instance sandbox and clears the handle", async () => {
