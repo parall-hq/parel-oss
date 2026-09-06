@@ -44,7 +44,21 @@
         },
         "config": {
           "type": "object",
-          "additionalProperties": true
+          "additionalProperties": true,
+          "properties": {
+            "baseUrl": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Endpoint base URL; required for openai-compatible / anthropic-compatible."
+            },
+            "headers": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Default HTTP headers sent on every provider request (string values only)."
+            }
+          }
         }
       },
       "additionalProperties": false

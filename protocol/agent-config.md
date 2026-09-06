@@ -44,6 +44,13 @@ Current public provider aliases:
 
 Provider-specific options belong under `model.config`.
 
+Options every built-in provider honors:
+
+| Key | Meaning |
+| --- | --- |
+| `baseUrl` | Endpoint base URL. Required for `openai-compatible` and `anthropic-compatible`. |
+| `headers` | String map sent on every provider request as default HTTP headers — for gateways that route or authorize by header (a lane header in front of a shared hostname, `HTTP-Referer` / `X-Title` for OpenRouter). Non-string values are ignored. |
+
 ## Runtime Plugins
 
 `plugins` accepts three forms:
