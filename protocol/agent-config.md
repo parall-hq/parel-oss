@@ -61,8 +61,9 @@ dialect. Explicit provider options remain available for supported extensions.
 
 For Anthropic, `model.config.thinkingMode` optionally selects `adaptive`,
 `enabled`, or `disabled`. Supported recent models use adaptive thinking by
-default. Manual thinking requires a budget of at least 1024 tokens below the
-output limit; invalid explicit combinations fail before the provider request.
+default. Manual thinking requires a budget of at least 1024 tokens, and that
+budget must be smaller than the output limit. Invalid explicit combinations
+fail before the provider request.
 The runtime raises its default output limit when necessary to accommodate a
 manual thinking budget, without overriding an explicit output limit.
 
