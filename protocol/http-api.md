@@ -27,6 +27,27 @@ a JSON object carrying a human-readable `error` string plus optional fields.
 }
 ```
 
+Model failures can use these additive codes: `model_incomplete` (missing a
+normal end or unfinished tool arguments), `model_output_limit`, `model_filtered`,
+`model_timeout`, `provider_auth`, and `rate_limited`. A partial response is not a
+successful turn. Consumers must tolerate additional codes.
+
+A terminal turn receipt with `status: "error"` never represents successful
+completion. Rate-limit receipts may carry `completionKind: "retryable"` and a
+`retryAfterMs` hint in milliseconds; this is a provider delay, not a guarantee
+that replaying an entire turn is safe. Earlier hooks or tools may have performed
+external writes. Model retries stay within the current call and occur only
+before output, sharing one total budget.
+
+`GET /sessions/{sessionId}/steps` includes durable failure evidence as
+`{ "type": "turn_failed", "seq": number, "turnId": string, "reason": string }`,
+including failures after visible progress. Clients should deduplicate by the
+normal step cursor and tolerate unknown step types.
+
+Session termination cancels active model requests and prevents further requests
+or tool dispatch after cancellation is observed. It does not undo an external
+operation that has already started.
+
 ## Health
 
 | Method | Path | Auth | Description |

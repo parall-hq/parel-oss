@@ -57,6 +57,11 @@
                 "type": "string"
               },
               "description": "Default HTTP headers sent on every provider request (string values only)."
+            },
+            "requestMetadata": {
+              "type": "boolean",
+              "default": true,
+              "description": "Generate Parel model-call correlation headers. Set false to disable generated metadata; explicit config.headers remain unchanged."
             }
           }
         }
@@ -281,7 +286,7 @@
     "instanceVarRef": {
       "type": "string",
       "pattern": "^\\$\\{var:[A-Za-z_][A-Za-z0-9_]*\\}$",
-      "description": "Whole-value instance-var reference. The hosted runtime substitutes the instance's var at turn boundaries (type-aware: a value that parses as the field's number/boolean type substitutes as that type) and re-validates the field there; an unset var or a value of the wrong type fails the turn before any model call. Typed runtime knobs only — durability and deploymentTracking never take references, and a ref embedded in a longer string does not qualify."
+      "description": "Whole-value instance-var reference. The hosted runtime substitutes the instance's var at turn boundaries (type-aware: a value that parses as the field's number/boolean type substitutes as that type) and re-validates the field there; an unset var or a value of the wrong type fails the turn before any model call. Typed runtime knobs only \u2014 durability and deploymentTracking never take references, and a ref embedded in a longer string does not qualify."
     },
     "pluginDeclaration": {
       "oneOf": [

@@ -51,6 +51,11 @@ Options every built-in provider honors:
 | `baseUrl` | Endpoint base URL. Required for `openai-compatible` and `anthropic-compatible`. |
 | `headers` | String map sent on every provider request as default HTTP headers — for gateways that route or authorize by header (a lane header in front of a shared hostname, `HTTP-Referer` / `X-Title` for OpenRouter). Non-string values are ignored. |
 
+`requestMetadata` is a boolean (default `true`) controlling generated model request
+correlation headers. Chat Completions parameter conversion uses `parameterDialect`;
+Anthropic thinking mode can use `thinkingMode`. See [Model Calls](model-calls.md)
+for supported values, defaults, compatibility, and completion/cancellation semantics.
+
 ## Runtime Plugins
 
 `plugins` accepts three forms:
