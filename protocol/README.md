@@ -7,6 +7,7 @@ Hosted control-plane implementation details are intentionally out of scope.
 | Document | Purpose |
 | --- | --- |
 | [agent-config.md](agent-config.md) | Human-readable semantics for `agent.yaml`. |
+| [model-calls.md](model-calls.md) | Model completion, cancellation, parameter formats, and request correlation. |
 | [http-api.md](http-api.md) | Public REST API surface used by clients and CLI. |
 | [websocket.md](websocket.md) | Session WebSocket connection and event ordering. |
 | [message-parts.md](message-parts.md) | Provider-neutral transcript part semantics. |

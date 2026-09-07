@@ -51,21 +51,10 @@ Options every built-in provider honors:
 | `baseUrl` | Endpoint base URL. Required for `openai-compatible` and `anthropic-compatible`. |
 | `headers` | String map sent on every provider request as default HTTP headers — for gateways that route or authorize by header (a lane header in front of a shared hostname, `HTTP-Referer` / `X-Title` for OpenRouter). Non-string values are ignored. |
 
-For Chat Completions, `model.config.parameterDialect` selects parameter names:
-`openai` uses `max_completion_tokens` and `reasoning_effort`; `openrouter` and
-`parall` use `max_tokens` and `reasoning.max_tokens`; `compatible` supplies only
-the common output limit. Known provider aliases and OpenRouter/Parall endpoints
-are recognized automatically, including existing Parall URLs without this field.
-An unknown compatible endpoint requesting reasoning must declare its actual
-dialect. Explicit provider options remain available for supported extensions.
-
-For Anthropic, `model.config.thinkingMode` optionally selects `adaptive`,
-`enabled`, or `disabled`. Supported recent models use adaptive thinking by
-default. Manual thinking requires a budget of at least 1024 tokens, and that
-budget must be smaller than the output limit. Invalid explicit combinations
-fail before the provider request.
-The runtime raises its default output limit when necessary to accommodate a
-manual thinking budget, without overriding an explicit output limit.
+`requestMetadata` is a boolean (default `true`) controlling generated model request
+correlation headers. Chat Completions parameter conversion uses `parameterDialect`;
+Anthropic thinking mode can use `thinkingMode`. See [Model Calls](model-calls.md)
+for supported values, defaults, compatibility, and completion/cancellation semantics.
 
 ## Runtime Plugins
 
