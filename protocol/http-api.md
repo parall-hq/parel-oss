@@ -64,11 +64,13 @@ re-points the active version without creating a new one.
 | --- | --- | --- | --- |
 | `POST` | `/agents` | raw `agent.yaml`, or JSON (below) | Deploy: upsert by `(org, name)`. A new name creates the agent at `v1`; an existing name creates a new version and makes it live. Returns `{ id, name, version }` (`201` create, `200` update). |
 | `GET` | `/agents` | none | List agents. |
-| `GET` | `/agents/{idOrName}` | none | Get agent details and active config. Accepts id or name. |
+| `GET` | `/agents/{idOrName}` | none | Get agent details and active config (`vars_json`: the agent-level default vars, see Instances). Accepts id or name. |
+| `PATCH` | `/agents/{idOrName}` | `{ "vars": { "NAME": "value" } }` | Replace the agent-level default vars (every instance overrides them per key). Returns the agent as `GET` does. |
 | `PUT` | `/agents/{agentId}` | raw `agent.yaml`, or JSON (below) | Id-addressed deploy: a new version of an existing agent. Never renames; `agents.name` is the identity and `agent.name` in the config is not validated here. |
 | `DELETE` | `/agents/{idOrName}` | none | Delete an agent by id or name (cascades its versions, deployments, and agent-scoped secrets). |
 | `GET` | `/agents/{idOrName}/versions` | none | List versions, newest first (`active: true` marks the live one). |
 | `GET` | `/agents/{idOrName}/deployments` | none | List the deployment timeline (`kind`: `deploy` \| `rollback`), newest first. |
+| `POST` | `/agents/{idOrName}/deployments` | `{ "version": "v3", "dryRun"?: true }` | Make a version live (promote or roll back). With `dryRun: true` (or `?dryRun=true`) nothing is activated: the response carries `{ ok, instances: [{ key, tracking, affected, ok, unresolved, errors, warnings }] }` — the version preflighted against every instance's effective vars. |
 | `POST` | `/agents/{idOrName}/rollback` | `{ "to": 3 }` (version number or id; omit for the previously live version) | Make an existing version live again. |
 | `POST` | `/agents/{idOrName}/rename` | `{ "name": "new-name" }` | Rename in place (keeps id, versions, sessions). `409` if the name is taken. |
 
@@ -96,6 +98,21 @@ Invalid config returns `400`:
   "details": "version: Required; model: Required"
 }
 ```
+
+### Instances
+
+An instance is the durable entity between an agent and its sessions (private
+state, a version pin, non-secret vars). Instances are create-or-get by key —
+`main` always exists.
+
+| Method | Path | Body | Description |
+| --- | --- | --- | --- |
+| `GET` | `/agents/{idOrName}/instances` | none | List instances (`main` included) with session counts and cost. |
+| `GET` | `/agents/{idOrName}/instances/{key}` | none | Get one instance (`vars_json`: its own vars). |
+| `PATCH` | `/agents/{idOrName}/instances/{key}` | `{ "tracking": "pinned", "version": "v3" }` \| `{ "tracking": "live" }` and/or `{ "vars": { ... } }` | Create-or-update: pin/unpin the version and/or replace the instance's vars (full object). |
+| `PATCH` | `/agents/{idOrName}/instances` | `[{ "key": "...", "vars"?: { ... }, "tracking"?: "...", "version"?: "..." }]` (≤ 500 items, keys unique) | Batch form of the single-key PATCH with identical per-item semantics. Returns `{ ok, results: [{ key, ok, instance } \| { key, ok: false, error }] }` in input order; invalid items are skipped, the rest applied; replaying the same body is idempotent. |
+| `POST` | `/agents/{idOrName}/instances/{key}/reset` | `{ "generation"?: "..." }` | Wipe the entity state (sandbox handles, memory); sessions are untouched. |
+| `DELETE` | `/agents/{idOrName}/instances/{key}` | none (`?force=true` retires live sessions first) | Delete the instance and its state; `main` cannot be deleted. |
 
 ## Sessions
 

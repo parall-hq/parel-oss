@@ -112,27 +112,43 @@ Model provider packages must not be listed under `plugins`.
 Two per-instance controls compose with the instance layer (agents ×
 instances × sessions):
 
-- **Vars** — non-secret per-instance parameters. Set them on an instance
-  (`PATCH /agents/:agent/instances/:key` with `{"vars": {"NAME": "value"}}`,
-  or `parel instances vars`), reference them anywhere in plugin or model
-  config values as `${var:NAME}`. One config, N instances, each with its own
-  prompt variables — no config copies. Values hot-update on the next turn for
-  live sessions; pinned sessions keep their creation-time snapshot (pinned
-  means frozen). In plugin config, unresolved references stay as literals
-  (visible, debuggable, never fatal). Secrets keep their own `${NAME}` syntax
-  and stores.
+- **Vars** — non-secret parameters referenced anywhere in plugin or model
+  config values as `${var:NAME}`. A value comes from the first of three layers
+  that has it:
+
+  1. the instance's own vars (`PATCH /agents/:agent/instances/:key` with
+     `{"vars": {"NAME": "value"}}`, or the batch form
+     `PATCH /agents/:agent/instances` with `[{"key": "...", "vars": {...}}]`);
+  2. the agent-level defaults (`PATCH /agents/:agent` with `{"vars": {...}}`),
+     shared by every instance — and the only layer an ephemeral session sees;
+  3. the reference's own default, `${var:NAME:-default}`. It applies only when
+     no layer sets the var (an instance that stores `""` keeps `""`); it may
+     not contain braces or a nested reference, and a config with such text is
+     rejected at deploy.
+
+  One config, N instances, each with its own values — no config copies. Values
+  hot-update on the next turn for live sessions; pinned sessions keep their
+  creation-time snapshot (pinned means frozen). In plugin config, references
+  with no value from any layer stay as literals (visible, debuggable, never
+  fatal). Secrets keep their own `${NAME}` syntax and stores; a secret field
+  may hold a `${var:NAME}` reference (per-instance secret selection) but not
+  one with a `:-default`, since the default text would be a literal secret in
+  the stored config. Before activating a version, `POST /agents/:agent/deployments`
+  with `{"version": "vN", "dryRun": true}` reports, per instance, which
+  references would still lack a value.
 
   Typed `runtime` knobs (`maxTurns`, `maxSteps`, `instanceBudgetUsd`,
   `maxParallelToolCalls`, `toolResultMaxBytes`, `checkpointInterval`,
   `reasoning.enabled`, `reasoning.budgetTokens`) may hold a **whole-value**
   reference — `enabled: "${var:REASONING}"` deploys fine, and the runtime
   substitutes type-aware per instance at turn boundaries (`"true"` → boolean,
-  `"16384"` → number) and re-validates the field's real type there. In the
-  `model` and `runtime` blocks references fail fast: an unset var or a value
-  of the wrong type fails the turn before any model call is made. A reference
-  embedded in a longer string does not qualify as whole-value, and
-  `durability` / `deploymentTracking` (session-shape enums) never take
-  references.
+  `"16384"` → number) and re-validates the field's real type there; a
+  whole-value default (`enabled: "${var:REASONING:-false}"`) substitutes the
+  same way. In the `model` and `runtime` blocks references fail fast: a var
+  with no value from any layer, or a value of the wrong type, fails the turn
+  before any model call is made. A reference embedded in a longer string does
+  not qualify as whole-value, and `durability` / `deploymentTracking`
+  (session-shape enums) never take references.
 
 - **`runtime.instanceBudgetUsd`** — spend ceiling per instance. Once the
   total cost across ALL sessions of an instance reaches the ceiling, new
