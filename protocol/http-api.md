@@ -466,3 +466,7 @@ secret, and billing management. Keys created without `scopes` default to
 | `PUT` | `/billing/auto-topup` | `{ "amount": 10, "threshold": 2 }` | Update auto top-up. |
 
 Billing endpoints are part of the hosted service contract. Self-hosted runtimes may omit them.
+
+## Execution control
+
+See [execution-control.md](execution-control.md) for current-turn Stop, terminal cancellation receipts, and persistent instance execution holds.
