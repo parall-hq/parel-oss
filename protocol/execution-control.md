@@ -35,6 +35,15 @@ include `sessionId`, `turnId`, `busy`, `stopping`, and `pinned`. A hold prevents
 turns, child turns, queued callbacks, input normalization and slash commands from
 starting. Already admitted work can finish. Inputs remain queued.
 
+Each execution permit has a stable `session_id` and `execution_id`. A turn's
+permit uses that turn's ID as `execution_id`; scheduling or command permits do
+not identify a turn. Session state and permits are read separately, so a permit
+may be visible before its turn is published. Capture permit IDs, and bind an
+unpublished turn only when its observed `turnId` equals a captured permit ID.
+Never infer this relationship from session identity alone. An opaque permit
+without a matching turn is only waited on until that exact permit disappears;
+a later permit or turn in the same session is not part of the old Stop.
+
 **A held instance is not necessarily idle.** Before moving shared resources,
 require that every session reports `busy: false` and `executions` is empty while
 `operationId` equals the requested ID. Failure or timeout must leave the hold in
