@@ -191,8 +191,9 @@ interface AgentEventBase {
  *
  * All three scopes are live: turn lifecycle (`observe: [turn]`), step trace
  * (`model_reasoning` / `tool_call` / `tool_result`, `observe: [steps]`), and
- * `execution_paused` (`observe: [pause]`). The one exception is `child_spawn_failed`,
- * which is pushed regardless of the binding's observe scopes (see its doc).
+ * `execution_paused` (`observe: [pause]`). The exceptions are `child_spawn_failed`
+ * and `envelope_dropped`, which are pushed regardless of the binding's observe
+ * scopes (see their docs).
  *
  * A `turn_completed` fires unconditionally on every cleanly finished turn — including
  * turns that produced no reply (`hadOutput: false`), which is the reliable
@@ -209,6 +210,15 @@ export type AgentEvent =
 			hadOutput: boolean;
 	  })
 	| (AgentEventBase & { type: "turn_failed"; error: string })
+	/**
+	 * Envelopes that arrived while the turn was running joined it at a step boundary
+	 * (binding `routing.injectInFlight`): the next model call sees them. Scope `turn`.
+	 * `absorbedEnvelopeIds` names the ones that just joined; the base `envelopeIds`
+	 * already includes them, as does every later event of this turn. Together with
+	 * `turn_started` this is the per-envelope "picked up" signal: an envelope is named
+	 * by exactly one of the two.
+	 */
+	| (AgentEventBase & { type: "inputs_absorbed"; absorbedEnvelopeIds: string[] })
 	| (AgentEventBase & { type: "model_reasoning"; text: string })
 	| (AgentEventBase & { type: "tool_call"; callId: string; name: string; input: unknown })
 	| (AgentEventBase & {
@@ -249,6 +259,31 @@ export type AgentEvent =
 			turnId?: undefined;
 			subject?: undefined;
 			envelopeIds?: undefined;
+	  }
+	/**
+	 * Envelopes this connector emitted will never be processed — a terminal outcome,
+	 * the platform does not retry them. Not turn-scoped (no turn ever consumed them)
+	 * and, like `child_spawn_failed`, pushed regardless of the binding's observe
+	 * scopes: it answers the connector's own `emitEvent` effect, which has no
+	 * synchronous return. `code`: too_large | invalid_request | no_binding |
+	 * child_not_found | child_failed | session_terminated (the session the
+	 * conversation routes to was terminated — including envelopes that were still
+	 * queued there at that moment). Success is never announced here: a processed
+	 * envelope shows up in `turn_started` / `inputs_absorbed`. Transient outcomes (a
+	 * full session queue, a child still provisioning) are retried by the platform and
+	 * stay silent, as does an unverified webhook signature. Best-effort like every
+	 * agent event; the durable answer is the envelope receipt lookup
+	 * (`GET /channels/connections/:id/events?by_envelope_id=`).
+	 */
+	| {
+			type: "envelope_dropped";
+			envelopeIds: string[];
+			code: string;
+			error: string;
+			sessionId?: undefined;
+			turnId?: undefined;
+			subject?: undefined;
+			childRef?: undefined;
 	  };
 
 /**
