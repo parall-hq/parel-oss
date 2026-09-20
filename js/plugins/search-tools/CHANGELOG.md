@@ -1,5 +1,13 @@
 # @parel/search-tools
 
+## 0.1.21
+
+### Patch Changes
+
+- Updated dependencies [2d60db5]
+  - @parel/plugin-sdk@0.17.0
+  - @parel/workspace@0.2.9
+
 ## 0.1.20
 
 ### Patch Changes
