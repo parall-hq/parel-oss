@@ -113,6 +113,9 @@ state, a version pin, non-secret vars). Instances are create-or-get by key —
 | `PATCH` | `/agents/{idOrName}/instances` | `[{ "key": "...", "vars"?: { ... }, "tracking"?: "...", "version"?: "..." }]` (≤ 500 items, keys unique) | Batch form of the single-key PATCH with identical per-item semantics. Returns `{ ok, results: [{ key, ok, instance } \| { key, ok: false, error }] }` in input order; invalid items are skipped, the rest applied; replaying the same body is idempotent. |
 | `POST` | `/agents/{idOrName}/instances/{key}/reset` | `{ "generation"?: "..." }` | Wipe the entity state (sandbox handles, memory); sessions are untouched. |
 | `DELETE` | `/agents/{idOrName}/instances/{key}` | none (`?force=true` retires live sessions first) | Delete the instance and its state; `main` cannot be deleted. |
+| `GET` | `/agents/{idOrName}/instances/{key}/execution` | none | Current hold and execution permits. See [execution-control.md](execution-control.md). |
+| `PUT` | `/agents/{idOrName}/instances/{key}/execution-holds/{operationId}` | `{ "refreshVars"?: boolean }` | Hold new work of the instance. |
+| `DELETE` | `/agents/{idOrName}/instances/{key}/execution-holds/{operationId}` | none | Release a hold and wake deferred work. |
 
 ## Sessions
 
@@ -141,6 +144,8 @@ state, a version pin, non-secret vars). Instances are create-or-get by key —
 | `POST` | `/sessions/{sessionId}/messages` | `{ "content": string \| Part[] }` | Start an async turn, or run a slash command. See [Media input](#media-input), [Slash commands](#slash-commands). |
 | `GET` | `/sessions/{sessionId}/commands` | none | List the slash commands available in this session. |
 | `POST` | `/sessions/{sessionId}/steer` | `{ "content": "..." }` | Queue steering input. |
+| `GET` | `/sessions/{sessionId}/execution` | none | Current turn, busy, stopping, and paused state. See [execution-control.md](execution-control.md). |
+| `POST` | `/sessions/{sessionId}/turns/{turnId}/stop` | none | Stop exactly that turn; the session stays reusable. |
 | `GET` | `/sessions/{sessionId}/ws` | WebSocket subprotocol token | Open session WebSocket (see [websocket.md](websocket.md#authentication)). |
 
 ## Slash Commands
