@@ -40,9 +40,11 @@ external writes. Model retries stay within the current call and occur only
 before output, sharing one total budget.
 
 `GET /sessions/{sessionId}/steps` includes durable failure evidence as
-`{ "type": "turn_failed", "seq": number, "turnId": string, "reason": string }`,
-including failures after visible progress. Clients should deduplicate by the
-normal step cursor and tolerate unknown step types.
+`{ "type": "turn_failed", "seq": number, "turnId": string, "reason": string, "errorCode"?: string }`,
+including failures after visible progress. `errorCode` is the turn's stable
+classification when it has one; `turn_stopped` marks a user Stop, which is not a
+failure (see [execution-control.md](execution-control.md)). Clients should
+deduplicate by the normal step cursor and tolerate unknown step types.
 
 Session termination cancels active model requests and prevents further requests
 or tool dispatch after cancellation is observed. It does not undo an external

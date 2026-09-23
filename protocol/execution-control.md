@@ -49,7 +49,8 @@ What stopping does:
 
 `stopping` acknowledges the request, not completion. The turn's normal receipt
 reports the end with `completionKind: "cancelled"` and `errorCode:
-"turn_stopped"`. Clients must not retry stopped work automatically. The session
+"turn_stopped"`, and its `turn_failed` step in `GET /sessions/{session}/steps`
+carries the same `errorCode`. Clients must not retry stopped work automatically. The session
 returns to `ready` with its transcript, identity, and stores intact. Actions a
 tool had already performed are not rolled back.
 
