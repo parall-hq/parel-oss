@@ -195,6 +195,27 @@ Use `store: "reset"` for stateless plugins or state that points to live external
 resources. Use `sideEffects: "require_approval"` or `"deny_replay"` when replaying
 the plugin could duplicate external actions.
 
+## Tool Cancellation
+
+A stopped turn cancels its in-flight tool calls
+([execution-control.md](execution-control.md)). A tool that starts work outside
+its own handler — a sandbox command, a remote job — should register an `abort`
+hook, because the handler may run in a different isolate than the one that
+observes the stop:
+
+```ts
+ctx.tool(definition, handler, {
+  abort: async ({ toolCallId }) => {
+    // Idempotent and stateless: find the work by toolCallId, end it, and leave
+    // a marker so a start that arrives later for this toolCallId does nothing.
+  },
+});
+```
+
+`ToolHandlerContext.signal` also aborts on stop, but only in the isolate that
+observed it; use it to stop local waits early. Without either, the call runs to
+its own completion and the host starts no further tools in that step.
+
 ## Lifecycle Events
 
 | Event | Purpose |
