@@ -123,7 +123,7 @@ state, a version pin, non-secret vars). Instances are create-or-get by key —
 | `GET` | `/sessions/{sessionId}` | none | Get session state. |
 | `GET` | `/sessions/{sessionId}/messages?view=chat` | none | Get transcript messages. |
 | `GET` | `/sessions/{sessionId}/events` | query | Get persisted events. |
-| `GET` | `/sessions/{sessionId}/logs` | none | Get logs. |
+| `GET` | `/sessions/{sessionId}/logs` | none | Get execution logs. Retained for 14 days, at most the newest 2000 per session; export anything you need to keep longer. |
 | `GET` | `/sessions/{sessionId}/trace` | none | Get trace view. |
 | `GET` | `/sessions/{sessionId}/execution/snapshots` | query | List execution snapshots for a session. |
 | `POST` | `/sessions/{sessionId}/execution/snapshots` | snapshot capture options | Capture a manual execution snapshot. |
