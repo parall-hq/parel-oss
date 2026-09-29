@@ -12,6 +12,7 @@ Hosted control-plane implementation details are intentionally out of scope.
 | [websocket.md](websocket.md) | Session WebSocket connection and event ordering. |
 | [message-parts.md](message-parts.md) | Provider-neutral transcript part semantics. |
 | [plugins.md](plugins.md) | Runtime plugin contract and lifecycle hooks. |
+| [execution-control.md](execution-control.md) | Stopping a turn and holding an instance's new work. |
 | [versioning.md](versioning.md) | Public contract versioning policy. |
 
 Machine-readable contracts live in [../schemas](../schemas).

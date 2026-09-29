@@ -343,7 +343,30 @@ export interface ToolInvocationIdentity {
 export interface ToolRegistrationOptions {
 	scheduling?: ToolScheduling;
 	isConcurrencySafe?: (params: Record<string, unknown>) => boolean | Promise<boolean>;
+	/**
+	 * Out-of-band cancellation for a call of this tool, invoked when the turn
+	 * that issued it is stopped. The host may run it in a different isolate than
+	 * the handler, call it more than once, and call it before the handler has
+	 * started work — implementations must be stateless and idempotent, and must
+	 * make a later start of the same `toolCallId` a no-op. Design:
+	 * protocol/execution-control.md.
+	 */
+	abort?: ToolAbortHandler;
 }
+
+export interface ToolAbortRequest {
+	/** The `ToolInvocationIdentity.toolCallId` of the call to cancel. */
+	toolCallId: string;
+	sessionId: string;
+	turnId?: string;
+}
+
+export interface ToolAbortContext {
+	session: Readonly<SessionState>;
+	log: PluginLogger;
+}
+
+export type ToolAbortHandler = (request: ToolAbortRequest, ctx: ToolAbortContext) => Promise<void>;
 
 export interface PluginLogger {
 	debug(message: string, data?: unknown): void;
@@ -377,6 +400,24 @@ export interface ToolHandlerContext {
 	 * declares `consumes.invocationContext`. Design: docs/invocation-context.md.
 	 */
 	invocationContext?: InvocationContext;
+	/**
+	 * Aborted when the turn that issued this call is stopped. Best effort: it
+	 * only fires when the handler runs in the isolate that observed the stop, so
+	 * a tool that starts external work should also register
+	 * `ToolRegistrationOptions.abort`.
+	 */
+	signal?: ToolAbortSignal;
+}
+
+/**
+ * Environment-neutral view of the web `AbortSignal`. Hosts pass a real
+ * `AbortSignal`, which satisfies this shape.
+ */
+export interface ToolAbortSignal {
+	readonly aborted: boolean;
+	readonly reason?: unknown;
+	addEventListener(type: "abort", listener: () => void, options?: { once?: boolean }): void;
+	removeEventListener(type: "abort", listener: () => void): void;
 }
 
 export type ToolHandler = (
