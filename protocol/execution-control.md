@@ -30,7 +30,8 @@ POST /sessions/{session}/turns/{turn}/stop
 `POST` stops exactly `{turn}` and returns `{ "status": "stopping" | "unchanged",
 "turnId": "…" }`. A delayed or repeated request never affects a different turn.
 `unchanged` means `{turn}` is not the session's current turn, or its outcome was
-already decided (a completion that raced the stop wins).
+already decided. A stop that arrives before the outcome is decided wins, even
+when the turn's last step already produced its answer.
 
 What stopping does:
 
@@ -41,9 +42,12 @@ What stopping does:
   not started. Every cancelled call receives a tool result saying it was
   stopped, so the transcript stays valid for the next model call.
 - Child sessions started by the turn are stopped too, and their completion no
-  longer wakes the parent.
+  longer wakes the parent. A child session stopped on its own (not through its
+  parent) reports a cancelled result to its parent; that result joins the
+  parent's next turn and does not start one.
 - A turn waiting on an execution pause is finalized and its pause can no longer
-  be resumed.
+  be resumed. A stop and a resume of the same pause race; the first to claim
+  the pause decides, and the other returns `unchanged` or HTTP 409.
 - Background processes that a tool deliberately detached (for example, a
   started dev server) are not affected.
 
@@ -103,14 +107,17 @@ While a hold exists:
 - Work that already holds a permit continues. A hold is not a stop; stop that
   work first when the operation needs an idle instance, then wait until
   `permits` is empty.
-- Instance reset is rejected.
+- Instance reset and instance deletion are rejected with HTTP 409 and code
+  `instance_execution_held`.
 
-`refreshVars: true` is for resource migration. Every session of the instance
-reads the latest instance variables once before its next work starts — also
-sessions pinned to a deployment version, because a version pin fixes code, not
-resource identity. A failed read keeps the input queued and retries; it never
-falls back to the previous values. Update the instance variables before
-releasing the hold. All involved plugins must support the new configuration.
+`refreshVars: true` is for resource migration. When such a hold is released,
+every session of the instance reads the latest instance variables once before
+its next work starts — also sessions pinned to a deployment version, because a
+version pin fixes code, not resource identity. Update the instance variables
+before releasing the hold; variables changed after the release are not re-read
+by this mechanism. A failed read keeps the input queued and retries; it never
+falls back to the previous values. All involved plugins must support the new
+configuration.
 
 `DELETE` releases the hold and wakes the work it deferred. It is idempotent and
 also accepts an ID that was never acquired. HTTP 502 with code `wake_failed`

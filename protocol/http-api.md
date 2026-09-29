@@ -113,8 +113,8 @@ state, a version pin, non-secret vars). Instances are create-or-get by key —
 | `GET` | `/agents/{idOrName}/instances/{key}` | none | Get one instance (`vars_json`: its own vars). |
 | `PATCH` | `/agents/{idOrName}/instances/{key}` | `{ "tracking": "pinned", "version": "v3" }` \| `{ "tracking": "live" }` and/or `{ "vars": { ... } }` | Create-or-update: pin/unpin the version and/or replace the instance's vars (full object). |
 | `PATCH` | `/agents/{idOrName}/instances` | `[{ "key": "...", "vars"?: { ... }, "tracking"?: "...", "version"?: "..." }]` (≤ 500 items, keys unique) | Batch form of the single-key PATCH with identical per-item semantics. Returns `{ ok, results: [{ key, ok, instance } \| { key, ok: false, error }] }` in input order; invalid items are skipped, the rest applied; replaying the same body is idempotent. |
-| `POST` | `/agents/{idOrName}/instances/{key}/reset` | `{ "generation"?: "..." }` | Wipe the entity state (sandbox handles, memory); sessions are untouched. |
-| `DELETE` | `/agents/{idOrName}/instances/{key}` | none (`?force=true` retires live sessions first) | Delete the instance and its state; `main` cannot be deleted. |
+| `POST` | `/agents/{idOrName}/instances/{key}/reset` | `{ "generation"?: "..." }` | Wipe the entity state (sandbox handles, memory); sessions are untouched. `409 instance_execution_held` while an [execution hold](execution-control.md) exists. |
+| `DELETE` | `/agents/{idOrName}/instances/{key}` | none (`?force=true` retires live sessions first) | Delete the instance and its state; `main` cannot be deleted. `409 instance_execution_held` while an [execution hold](execution-control.md) exists, before any session is retired. |
 | `GET` | `/agents/{idOrName}/instances/{key}/execution` | none | Current hold and execution permits. See [execution-control.md](execution-control.md). |
 | `PUT` | `/agents/{idOrName}/instances/{key}/execution-holds/{operationId}` | `{ "refreshVars"?: boolean }` | Hold new work of the instance. |
 | `DELETE` | `/agents/{idOrName}/instances/{key}/execution-holds/{operationId}` | none | Release a hold and wake deferred work. |
