@@ -3092,8 +3092,9 @@ const billingSummary = defineCommand({
 			}
 			console.log(c.bold("Billing Summary"));
 			console.log(`  total tokens:   ${data.total_tokens}`);
-			console.log(`  platform cost:  $${Number(data.platform_cost ?? 0).toFixed(4)}`);
-			console.log(`  BYOK savings:   $${Number(data.byok_cost ?? 0).toFixed(4)}`);
+			console.log(
+				`  model spend:    $${Number(data.total_cost ?? 0).toFixed(4)} (estimate, paid to your providers)`,
+			);
 			console.log(`  total records:  ${data.total_records}`);
 		} catch (err) {
 			handleError(err);
@@ -3101,26 +3102,47 @@ const billingSummary = defineCommand({
 	},
 });
 
-const billingBalance = defineCommand({
-	meta: { name: "balance", description: "Current balance" },
+interface BillingPlan {
+	plan: string;
+	status: string;
+	month: string;
+	steps: number;
+	connectionDays: number;
+	usageUsd: number;
+	includedSteps: number | null;
+	includedUsd: number | null;
+	overageUsd: number;
+	spendCapUsd: number | null;
+	limitReached: boolean;
+}
+
+const billingPlan = defineCommand({
+	meta: { name: "plan", description: "Plan and this month's usage" },
 	args: { json: { type: "boolean" }, server: { type: "string" } },
 	async run({ args }) {
 		requireAuth(args);
 		try {
-			const res = await apiFetch(resolveServer(args), "/billing/balance");
-			const data = (await res.json()) as Record<string, unknown>;
+			const res = await apiFetch(resolveServer(args), "/billing/plan");
+			const data = (await res.json()) as BillingPlan;
 			if (wantsJson(args)) {
 				console.log(JSON.stringify(data));
 				return;
 			}
-			console.log(`  balance: $${Number(data.balance ?? 0).toFixed(2)}`);
-			if (data.has_payment_method) {
-				console.log(
-					`  auto top-up: ${c.green("on")} (threshold: $${data.auto_topup_threshold}, amount: $${data.auto_topup_amount})`,
-				);
-			} else {
-				console.log(`  auto top-up: ${c.dim("off (no payment method)")}`);
-			}
+			const usd = (v: number) => `$${v.toFixed(2)}`;
+			console.log(
+				c.bold(`Plan: ${data.plan}`) + (data.status === "active" ? "" : ` (${data.status})`),
+			);
+			console.log(`  month:        ${data.month}`);
+			console.log(`  steps:        ${data.steps}`);
+			console.log(`  connections:  ${data.connectionDays} connection-days`);
+			console.log(`  usage:        ${usd(data.usageUsd)}`);
+			if (data.includedSteps !== null) console.log(`  included:     ${data.includedSteps} steps`);
+			if (data.includedUsd !== null) console.log(`  included:     ${usd(data.includedUsd)}`);
+			console.log(`  overage:      ${usd(data.overageUsd)}`);
+			if (data.spendCapUsd !== null)
+				console.log(`  spend cap:    ${usd(data.spendCapUsd)} over plan`);
+			if (data.limitReached)
+				console.log(c.yellow("  limit reached — new turns are paused until next month"));
 		} catch (err) {
 			handleError(err);
 		}
@@ -3129,7 +3151,7 @@ const billingBalance = defineCommand({
 
 const billing = defineCommand({
 	meta: { name: "billing", description: "Billing and usage" },
-	subCommands: { summary: billingSummary, balance: billingBalance },
+	subCommands: { summary: billingSummary, plan: billingPlan },
 });
 
 // ── Root ─────────────────────────────────────────────────────────────
