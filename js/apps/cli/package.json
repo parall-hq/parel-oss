@@ -1,6 +1,6 @@
 {
   "name": "@parel/cli",
-  "version": "0.5.4",
+  "version": "0.6.0",
   "description": "PAREL CLI - deploy and manage AI agents.",
   "license": "MIT",
   "repository": {

@@ -1,5 +1,11 @@
 # @parel/sandbox-vercel
 
+## 0.3.10
+
+### Patch Changes
+
+- @parel/plugin-sdk@0.17.1
+
 ## 0.3.9
 
 ### Patch Changes
