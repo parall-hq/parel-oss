@@ -1,5 +1,12 @@
 # @parel/plugin-sdk
 
+## 0.17.1
+
+### Patch Changes
+
+- Updated dependencies [b7c339e]
+  - @parel/core@0.19.0
+
 ## 0.17.0
 
 ### Minor Changes
