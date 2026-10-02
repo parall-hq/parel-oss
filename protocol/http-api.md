@@ -461,8 +461,9 @@ secret, and billing management. Keys created without `scopes` default to
 | --- | --- | --- | --- |
 | `GET` | `/billing/summary` | none | Usage summary. |
 | `GET` | `/billing/usage` | query | Usage records. |
-| `GET` | `/billing/balance` | none | Account balance. |
-| `POST` | `/billing/topup` | `{ "amount": 10 }` | Create top-up checkout. |
-| `PUT` | `/billing/auto-topup` | `{ "amount": 10, "threshold": 2 }` | Update auto top-up. |
+| `GET` | `/billing/balance` | none | Legacy. Always returns zero: the hosted service keeps no prepaid balance. |
 
 Billing endpoints are part of the hosted service contract. Self-hosted runtimes may omit them.
+The hosted service does not provide model access: model calls run on provider keys the
+organization supplies (an organization provider key or a `model.config.apiKey` secret
+reference), and the provider bills the organization directly.
