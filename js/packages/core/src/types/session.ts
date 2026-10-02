@@ -426,6 +426,11 @@ export interface TokenUsage {
 	cacheReadTokens?: number;
 	cacheWriteTokens?: number;
 	cacheDeletedTokens?: number;
+	/**
+	 * Cost of this call in USD as reported by the provider itself (e.g. OpenRouter's
+	 * `usage.cost`). When present it wins over a price-table estimate.
+	 */
+	costUsd?: number;
 }
 
 export interface ModelCallParams {

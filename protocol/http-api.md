@@ -461,9 +461,21 @@ secret, and billing management. Keys created without `scopes` default to
 | --- | --- | --- | --- |
 | `GET` | `/billing/summary` | none | Usage summary. |
 | `GET` | `/billing/usage` | query | Usage records. |
+| `GET` | `/billing/plan` | none | Plan and this month's metered usage: `plan`, `status`, `month`, `steps`, `connectionDays`, `usageUsd`, `includedSteps`, `includedUsd`, `overageUsd`, `spendCapUsd`, `limitReached`. |
+| `PUT` | `/billing/spend-cap` | `{ "usd": 20 }` | Set the monthly overage cap of a paid plan. |
+| `POST` | `/billing/checkout` | `{ "plan": "hobby" \| "pro" }` | Start a subscription checkout. Returns `{ "url" }`. |
+| `POST` | `/billing/portal` | none | Open the billing portal (change plan, cancel, card, invoices). Returns `{ "url" }`. |
 | `GET` | `/billing/balance` | none | Legacy. Always returns zero: the hosted service keeps no prepaid balance. |
 
 Billing endpoints are part of the hosted service contract. Self-hosted runtimes may omit them.
 The hosted service does not provide model access: model calls run on provider keys the
 organization supplies (an organization provider key or a `model.config.apiKey` secret
 reference), and the provider bills the organization directly.
+
+The hosted service meters the runtime itself: one **step** is one model call the runtime
+made and received usage for (sub-agent and plugin calls included), and an **always-on
+connection** is an enabled `managed_ws` channel connection, counted per day. Usage is
+summed per UTC calendar month against the plan's monthly allowance. When the Free plan's
+allowance or a paid plan's spend cap is used up, new turns are refused with error code
+`billing_insufficient`; enabling a connection beyond the plan's limit is refused with
+`plan_limit`. Prices and plans: <https://parel.sh/pricing>.
