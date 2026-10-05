@@ -54,6 +54,7 @@ export interface RuntimeConfig {
 	maxParallelToolCalls?: number;
 	toolResultMaxBytes?: number;
 	durability?: "event-sourced" | "ephemeral";
+	/** @deprecated Ignored by the runtime; remove it from configs. */
 	checkpointInterval?: number;
 	reasoning?: {
 		enabled: boolean;

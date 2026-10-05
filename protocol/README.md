@@ -2,7 +2,9 @@
 
 Language-neutral protocol documentation for public PAREL clients and SDKs.
 
-Hosted control-plane implementation details are intentionally out of scope.
+Hosted control-plane implementation details are intentionally out of scope. The
+guided documentation for the hosted service (quickstart, API, CLI, and
+`agent.yaml` references) is at <https://parel.sh/docs>.
 
 | Document | Purpose |
 | --- | --- |
