@@ -40,7 +40,7 @@
     "lint": "biome check src/"
   },
   "dependencies": {
-    "@e2b/code-interpreter": "^2.6.1",
+    "@e2b/code-interpreter": "2.7.2",
     "@parel/capability-sandbox": "workspace:*",
     "@parel/plugin-sdk": "workspace:*",
     "e2b": "2.32.0"
