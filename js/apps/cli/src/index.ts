@@ -2650,7 +2650,7 @@ const apiKeysList = defineCommand({
 	},
 });
 
-const API_KEY_SCOPES = ["read", "write", "admin"];
+const KEY_SCOPES = ["read", "write", "admin"];
 
 const apiKeysCreate = defineCommand({
 	meta: { name: "create", description: "Create a new API key" },
@@ -2665,8 +2665,8 @@ const apiKeysCreate = defineCommand({
 	},
 	async run({ args }) {
 		requireAuth(args);
-		if (args.scope !== undefined && !API_KEY_SCOPES.includes(args.scope))
-			fail(`--scope must be one of: ${API_KEY_SCOPES.join(", ")}`, EXIT_CLI);
+		if (args.scope !== undefined && !KEY_SCOPES.includes(args.scope))
+			fail(`--scope must be one of: ${KEY_SCOPES.join(", ")}`, EXIT_CLI);
 		try {
 			const res = await apiFetch(resolveServer(args), "/api-keys", {
 				method: "POST",
