@@ -1,6 +1,6 @@
 {
   "name": "@parel/plugin-sdk",
-  "version": "0.17.1",
+  "version": "0.17.2",
   "description": "Plugin authoring helpers for PAREL runtime plugins.",
   "keywords": [
     "parel",

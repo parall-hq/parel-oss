@@ -1,5 +1,11 @@
 # @parel/core
 
+## 0.19.1
+
+### Patch Changes
+
+- aec1eec: docs: refresh package READMEs and npm metadata (homepage https://parel.sh/docs, keywords). Plugin READMEs now use `${NAME}` secret references instead of literal keys, document `budget-cap` options, explain that steering is built into the runtime, and flag sandbox plugins that are not runnable or not yet verified on hosted PAREL.
+
 ## 0.19.0
 
 ### Minor Changes

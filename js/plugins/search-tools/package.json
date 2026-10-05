@@ -1,6 +1,6 @@
 {
   "name": "@parel/search-tools",
-  "version": "0.1.22",
+  "version": "0.1.23",
   "description": "Workspace text search tools for PAREL coding agents.",
   "keywords": [
     "parel",
