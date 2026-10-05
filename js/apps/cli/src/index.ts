@@ -13,17 +13,29 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { collectSecretRefs, formatSecretRef, parseSecretRef } from "@parel/core";
+import { formatSecretRef, parseSecretRef } from "@parel/core";
 import { defineCommand, runMain } from "citty";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import pkg from "../package.json" with { type: "json" };
 import {
+	agentSecretRefs,
+	channelSecretRefs,
 	type DeploySecret,
 	gatherDeploySecrets,
 	isValidSecretName,
 	parseSecretOverrides,
+	type StoredSecret,
 	secretValuePrefix,
+	unstoredSecretRefs,
 } from "./deploy-secrets.js";
+import { type EventsPage, readAllEvents } from "./session-events.js";
+import {
+	ChatPrinter,
+	createTurnCollector,
+	frameText,
+	type SessionFrame,
+	type TurnOutput,
+} from "./session-frames.js";
 import { sessionWebSocketRequest } from "./ws-auth.js";
 
 // ── Exit codes ─────────────────────────────────────────────────────
@@ -38,7 +50,8 @@ const EXIT_REQUIREMENTS = 4;
 // Per-command --json flag does the same for a single invocation.
 
 const globalJson = !!process.env.PAREL_JSON;
-const isColor = !globalJson && process.stdout.isTTY !== false && !process.env.NO_COLOR;
+// stdout.isTTY is undefined (not false) when output is piped, so test for true.
+const isColor = !globalJson && process.stdout.isTTY === true && !process.env.NO_COLOR;
 
 function wantsJson(args: { json?: boolean }): boolean {
 	return globalJson || !!args.json;
@@ -143,7 +156,8 @@ async function apiFetch(base: string, path: string, init?: RequestInit): Promise
 		let msg = `${res.status} ${res.statusText}`;
 		try {
 			const json = JSON.parse(body);
-			if (json.error) msg = json.error;
+			// `details` says what exactly is wrong (e.g. which config field), so keep it.
+			if (json.error) msg = json.details ? `${json.error}: ${json.details}` : json.error;
 		} catch {
 			if (body) msg += `: ${body}`;
 		}
@@ -195,11 +209,8 @@ interface ProviderKeyRow {
 	created_at?: string;
 }
 
-interface SecretRow {
+interface SecretRow extends StoredSecret {
 	id: string;
-	name: string;
-	/** Empty string = org-scoped; otherwise the owning agent id. */
-	agent_id: string;
 	value_prefix: string;
 	created_at?: string;
 	updated_at?: string;
@@ -216,6 +227,7 @@ interface ParsedAgentConfig {
 	modelProvider: string;
 	modelConfig: Record<string, unknown>;
 	plugins: ParsedPlugin[];
+	channels: Array<{ config: Record<string, unknown> }>;
 }
 
 interface ParsedPlugin {
@@ -471,10 +483,14 @@ function readAgentConfig(file: string): ParsedAgentConfig {
 	if (!modelProvider) throw new Error("model.provider is required");
 
 	const pluginsRaw = Array.isArray(raw.plugins) ? raw.plugins : [];
+	const channelsRaw = Array.isArray(raw.channels) ? raw.channels : [];
 	return {
 		modelProvider,
 		modelConfig: isRecord(raw.model.config) ? raw.model.config : {},
 		plugins: pluginsRaw.map(parsePluginDeclaration).filter((p): p is ParsedPlugin => p !== null),
+		channels: channelsRaw.map((channel) => ({
+			config: isRecord(channel) && isRecord(channel.config) ? channel.config : {},
+		})),
 	};
 }
 
@@ -682,29 +698,41 @@ async function buildAgentDeployRequest(
 	};
 }
 
-async function deployAgentFile(
-	server: string,
-	file: string,
-	path: string,
-	opts: { args: JsonArgs; secretOverrides?: Record<string, string> },
-): Promise<{
+/** The deploy's result for one `channels:` entry. */
+interface ChannelResult {
+	plugin: string;
+	type: string;
+	connectionId?: string;
+	status: "provisioned" | "error" | string;
+	error?: string;
+}
+
+interface DeployedAgent {
 	id: string;
 	name: string;
 	version?: number;
 	versionId?: string;
 	active?: boolean;
+	channels?: ChannelResult[];
 	uploaded_secrets: Array<{ name: string; source: string }>;
-}> {
-	const secrets = gatherDeploySecrets(
-		readAgentConfig(file),
-		opts.secretOverrides ?? {},
-		process.env,
-	);
-	if (secrets.length > 0 && !wantsJson(opts.args)) {
+}
+
+async function deployAgentFile(
+	server: string,
+	file: string,
+	path: string,
+	opts: { args: JsonArgs; secretOverrides?: Record<string, string>; uploadSecrets?: boolean },
+): Promise<DeployedAgent> {
+	const found = gatherDeploySecrets(readAgentConfig(file), opts.secretOverrides ?? {}, process.env);
+	// A staged version of an existing agent can't carry values (see checkStagedSecrets).
+	const secrets = opts.uploadSecrets === false ? [] : found;
+	if (found.length > 0 && !wantsJson(opts.args)) {
 		console.log(c.bold("Secrets"));
-		for (const s of secrets) {
+		for (const s of found) {
 			console.log(
-				`  ${c.green("✓")} ${s.name}  ${c.dim(`from ${s.source} → agent-level (${secretValuePrefix(s.value)})`)}`,
+				secrets.length > 0
+					? `  ${c.green("✓")} ${s.name}  ${c.dim(`from ${s.source} → agent-level (${secretValuePrefix(s.value)})`)}`
+					: `  ${c.dim("-")} ${s.name}  ${c.dim(`from ${s.source}, not uploaded: a staged version uses the stored value`)}`,
 			);
 		}
 	}
@@ -714,17 +742,30 @@ async function deployAgentFile(
 		headers: req.headers,
 		body: req.body,
 	});
-	const agent = (await res.json()) as {
-		id: string;
-		name: string;
-		version?: number;
-		versionId?: string;
-		active?: boolean;
-	};
+	const agent = (await res.json()) as Omit<DeployedAgent, "uploaded_secrets">;
 	return {
 		...agent,
 		uploaded_secrets: secrets.map((s) => ({ name: s.name, source: s.source })),
 	};
+}
+
+/** One line per declared channel, to append to a deploy's human-readable message. */
+function channelLines(channels: ChannelResult[] | undefined): string {
+	return (channels ?? [])
+		.map((ch) => {
+			const result =
+				ch.status === "provisioned"
+					? `${c.green("provisioned")}  ${c.dim(ch.connectionId ?? "")}`
+					: c.red(`${ch.status}: ${ch.error ?? "unknown error"}`);
+			return `\n  ${c.dim("channel")} ${ch.type} ${ch.plugin}  ${result}`;
+		})
+		.join("");
+}
+
+/** An agent's id from its name or id (`GET /agents/:idOrName`), for endpoints that only take ids. */
+async function resolveAgentId(server: string, ref: string): Promise<string> {
+	const res = await apiFetch(server, `/agents/${encodeURIComponent(ref)}`);
+	return ((await res.json()) as { id: string }).id;
 }
 
 // All session creation goes through the top-level resource route
@@ -810,12 +851,9 @@ async function buildCapabilityDoctorReport(
 	secretOverrides: Record<string, string> = {},
 ): Promise<CapabilityDoctorReport> {
 	const agent = readAgentConfig(file);
-	// Every `${NAME}` anywhere in the config, including plugins the registry
-	// does not know about — the reference contract is plugin-agnostic.
-	const allRefNames = new Set<string>(collectSecretRefs(agent.modelConfig));
-	for (const plugin of agent.plugins) {
-		for (const name of collectSecretRefs(plugin.config)) allRefNames.add(name);
-	}
+	// Every `${NAME}` in the config, including plugins the registry does not
+	// know about (the reference contract is plugin-agnostic) and channels.
+	const allRefNames = new Set<string>([...agentSecretRefs(agent), ...channelSecretRefs(agent)]);
 	// Reject overrides that match no reference, exactly like the deploy path
 	// (gatherDeploySecrets) — otherwise a typo'd --secret name passes doctor
 	// but fails the deploy it is meant to predict.
@@ -1125,14 +1163,11 @@ function printSessionMessages(messages: SessionMessage[]): void {
 	}
 }
 
-// ── WebSocket turn collector (used by send --wait and run) ─────────
+// ── WebSocket turn collector (used by send, run and try) ───────────
 
-interface TurnResult {
+interface TurnResult extends TurnOutput {
 	session_id: string;
 	status: "completed" | "error" | "timeout";
-	response: string;
-	messages: { role: string; content: string }[];
-	tool_calls: { name: string; arguments: unknown }[];
 	error?: string;
 }
 
@@ -1146,16 +1181,15 @@ function collectTurn(
 		const token = resolveApiKey() ?? "";
 		const request = sessionWebSocketRequest(wsUrl, sessionId, token);
 		const ws = new WebSocket(request.url, request.protocols);
-		let response = "";
-		const messages: TurnResult["messages"] = [];
-		const toolCalls: TurnResult["tool_calls"] = [];
+		const collector = createTurnCollector();
 		let resolved = false;
 
 		const finish = (status: TurnResult["status"], error?: string) => {
 			if (resolved) return;
 			resolved = true;
+			clearTimeout(timer);
 			ws.close();
-			resolve({ session_id: sessionId, status, response, messages, tool_calls: toolCalls, error });
+			resolve({ session_id: sessionId, status, ...collector.output, error });
 		};
 
 		const timer = setTimeout(
@@ -1167,57 +1201,48 @@ function collectTurn(
 			ws.send(JSON.stringify({ type: "message", content: message }));
 		});
 
-		ws.addEventListener("error", () => {
-			clearTimeout(timer);
-			finish("error", "WebSocket connection failed");
-		});
+		ws.addEventListener("error", () => finish("error", "WebSocket connection failed"));
 
-		ws.addEventListener("close", () => {
-			clearTimeout(timer);
-			if (!resolved) finish("error", "WebSocket closed before turn_end");
-		});
+		ws.addEventListener("close", () => finish("error", "WebSocket closed before turn_end"));
 
 		ws.addEventListener("message", (ev) => {
-			let event: { type: string; [k: string]: unknown };
+			let frame: SessionFrame;
 			try {
-				event = JSON.parse(String(ev.data));
+				frame = JSON.parse(String(ev.data));
 			} catch {
 				return;
 			}
-
-			switch (event.type) {
-				case "text":
-				case "message":
-				case "content_block_delta":
-				case "delta": {
-					const chunk = (event.text ?? event.delta ?? event.content ?? "") as string;
-					if (chunk) response += chunk;
-					break;
-				}
-				case "tool_call": {
-					toolCalls.push({
-						name: (event.name ?? "unknown") as string,
-						arguments: event.arguments ?? event.input ?? {},
-					});
-					break;
-				}
-				case "tool_result": {
-					const content = JSON.stringify(event.result ?? event.output ?? event);
-					messages.push({ role: "tool_result", content });
-					break;
-				}
-				case "turn_end":
-					clearTimeout(timer);
-					if (response) messages.push({ role: "assistant", content: response });
-					finish("completed");
-					break;
-				case "error":
-					clearTimeout(timer);
-					finish("error", (event.error ?? event.message ?? event.reason ?? "unknown") as string);
-					break;
-			}
+			const end = collector.handle(frame);
+			if (end) finish(end.status, end.error);
 		});
 	});
+}
+
+/**
+ * Prints a turn's result and exits: 0 when it completed, 2 on an error, 3 on a
+ * timeout. Exits as soon as the output is written instead of waiting for the
+ * session WebSocket's closing handshake, which can hold the process for seconds.
+ */
+function exitWithTurn(
+	result: TurnResult,
+	json: JsonArgs,
+	timeoutSec: number,
+	extra: Record<string, unknown> = {},
+): void {
+	const data = { ...extra, ...result };
+	let code = 0;
+	if (result.status === "timeout") {
+		code = EXIT_TIMEOUT;
+		if (wantsJson(json)) console.log(JSON.stringify(data));
+		else console.error(c.yellow(`Timeout after ${timeoutSec}s. Session: ${result.session_id}`));
+	} else if (result.status === "error") {
+		code = EXIT_API;
+		if (wantsJson(json)) console.log(JSON.stringify(data));
+		else console.error(c.red(`Error: ${result.error}`));
+	} else {
+		outputSuccess(data, result.response, json);
+	}
+	process.stderr.write("", () => process.stdout.write("", () => process.exit(code)));
 }
 
 // ── Commands: send (agent-first, non-interactive) ──────────────────
@@ -1225,8 +1250,8 @@ function collectTurn(
 const send = defineCommand({
 	meta: { name: "send", description: "Send a message, wait for result" },
 	args: {
-		agent: { type: "string", description: "Agent ID (auto-creates session)" },
-		session: { type: "string", description: "Existing session ID" },
+		agent: { type: "string", description: "Agent name or id (opens a new session)" },
+		session: { type: "string", description: "Existing session id" },
 		message: { type: "string", alias: "m", description: "Message text" },
 		stdin: { type: "boolean", description: "Read message from stdin" },
 		async: { type: "boolean", description: "Fire-and-forget (don't wait for response)" },
@@ -1278,18 +1303,7 @@ const send = defineCommand({
 		const timeoutSec = parseInt(args.timeout, 10) || 120;
 		const result = await collectTurn(wsUrl, sessionId, message, timeoutSec);
 
-		if (result.status === "timeout") {
-			if (wantsJson(json)) console.log(JSON.stringify(result));
-			else console.error(c.yellow(`Timeout after ${timeoutSec}s. Session: ${sessionId}`));
-			process.exit(EXIT_TIMEOUT);
-		}
-		if (result.status === "error") {
-			if (wantsJson(json)) console.log(JSON.stringify(result));
-			else console.error(c.red(`Error: ${result.error}`));
-			process.exit(EXIT_API);
-		}
-
-		outputSuccess(result, result.response, json);
+		exitWithTurn(result, json, timeoutSec);
 	},
 });
 
@@ -1351,20 +1365,7 @@ const run = defineCommand({
 		const timeoutSec = parseInt(args.timeout, 10) || 120;
 		const result = await collectTurn(wsUrl, sessionId, message, timeoutSec);
 
-		const fullResult = { agent_id: agentId, ...result };
-
-		if (result.status === "timeout") {
-			if (wantsJson(json)) console.log(JSON.stringify(fullResult));
-			else console.error(c.yellow(`Timeout after ${timeoutSec}s. Session: ${sessionId}`));
-			process.exit(EXIT_TIMEOUT);
-		}
-		if (result.status === "error") {
-			if (wantsJson(json)) console.log(JSON.stringify(fullResult));
-			else console.error(c.red(`Error: ${result.error}`));
-			process.exit(EXIT_API);
-		}
-
-		outputSuccess(fullResult, result.response, json);
+		exitWithTurn(result, json, timeoutSec, { agent_id: agentId });
 	},
 });
 
@@ -1373,11 +1374,15 @@ const run = defineCommand({
 const login = defineCommand({
 	meta: { name: "login", description: "Authenticate with an API key" },
 	args: {
-		key: { type: "string", description: "API key (pk_...)" },
+		key: {
+			type: "string",
+			description: "API key (pk_...); create one at https://parel.sh/console/settings/api-keys",
+		},
 		server: { type: "string", description: "Server URL" },
 		json: { type: "boolean", description: "JSON output" },
 	},
 	async run({ args }) {
+		_cmdJson = !!args.json;
 		let key = args.key;
 
 		if (!key && !process.stdin.isTTY) {
@@ -1395,14 +1400,15 @@ const login = defineCommand({
 		if (!key?.startsWith("pk_")) fail("Invalid API key. Keys start with pk_", EXIT_CLI);
 
 		const server = resolveServer(args);
+		let res: Response;
 		try {
-			const res = await fetch(`${server}/agents`, { headers: { Authorization: `Bearer ${key}` } });
-			if (!res.ok) {
-				fail(res.status === 401 ? "Invalid API key." : `Server returned ${res.status}`, EXIT_API);
-			}
+			res = await fetch(`${server}/agents`, { headers: { Authorization: `Bearer ${key}` } });
 		} catch {
-			fail(`Cannot reach server: ${server}`, EXIT_API);
+			// A network error is a problem on this side (exit 1), like in every other command.
+			fail(`Cannot reach server: ${server}`, EXIT_CLI);
 		}
+		if (!res.ok)
+			fail(res.status === 401 ? "Invalid API key." : `Server returned ${res.status}`, EXIT_API);
 
 		const cfg = loadConfig();
 		cfg.apiKey = key;
@@ -1491,8 +1497,11 @@ const deploy = defineCommand({
 	meta: { name: "deploy", description: "Deploy an agent from a YAML config" },
 	args: {
 		file: { type: "positional", description: "Path to agent.yaml", required: true },
-		"no-activate": {
+		// citty reads `--no-activate` as `activate: false` (it never sets a
+		// "no-activate" key), and lists this flag in help as --no-activate.
+		activate: {
 			type: "boolean",
+			default: true,
 			description: "Upload as a staged version without making it live; promote it later",
 		},
 		"require-ready": { type: "boolean", description: "Run capability doctor before deploy" },
@@ -1511,7 +1520,7 @@ const deploy = defineCommand({
 			if (args["require-ready"])
 				await requireAgentReady(args.file, resolveServer(args), args, secretOverrides);
 			const server = resolveServer(args);
-			if (args["no-activate"]) {
+			if (!args.activate) {
 				await deployStagedVersion(server, args.file, args, secretOverrides);
 				return;
 			}
@@ -1520,7 +1529,7 @@ const deploy = defineCommand({
 			});
 			outputSuccess(
 				agent,
-				`${c.green(`Deployed: ${agent.name}`)}${agent.version ? c.dim(` v${agent.version}`) : ""}  ${c.dim(agent.id)}`,
+				`${c.green(`Deployed: ${agent.name}`)}${agent.version ? c.dim(` v${agent.version}`) : ""}  ${c.dim(agent.id)}${channelLines(agent.channels)}`,
 				args,
 			);
 		} catch (err) {
@@ -1544,11 +1553,58 @@ async function deployAgentVersion(
 ): Promise<Awaited<ReturnType<typeof deployAgentFile>>> {
 	const name = readAgentName(file);
 	if (!name) fail("Deploy needs `agent.name` in the config to address the version.", EXIT_CLI);
+	const uploadSecrets =
+		opts.activate || !(await checkStagedSecrets(server, file, name, secretOverrides));
 	const query = opts.activate ? "" : "?activate=false";
 	return deployAgentFile(server, file, `/agents/${encodeURIComponent(name)}/versions${query}`, {
 		args,
 		secretOverrides,
+		uploadSecrets,
 	});
+}
+
+/**
+ * A staged version (--no-activate) of an existing agent can't carry secret
+ * values: the server refuses them, because stored values are shared with the
+ * live version. So every value it references must already be stored. Fails with
+ * the commands to run when one isn't. Returns false for a new agent, whose first
+ * version is live anyway and uploads values as usual.
+ */
+async function checkStagedSecrets(
+	server: string,
+	file: string,
+	name: string,
+	secretOverrides: Record<string, string>,
+): Promise<boolean> {
+	let agentId: string;
+	try {
+		agentId = await resolveAgentId(server, name);
+	} catch (err) {
+		if (err instanceof ApiError && err.status === 404) return false;
+		throw err;
+	}
+	if (Object.keys(secretOverrides).length > 0)
+		throw new Error(
+			`--secret can't be used with --no-activate on an existing agent: a staged version can't carry secret values. Store them with \`parel secrets set NAME --agent ${name}\`, or deploy without --no-activate.`,
+		);
+	const missing = unstoredSecretRefs(readAgentConfig(file), await listSecrets(server), agentId);
+	if (missing.agent.length > 0) {
+		throw new Error(
+			[
+				`A staged version can't carry secret values, and these aren't stored for ${name} or the workspace: ${missing.agent.join(", ")}.`,
+				"Store them first:",
+				...missing.agent.map((ref) => `  ${secretFixCommand(ref)} --agent ${name}`),
+				"Or deploy without --no-activate to upload them from your shell.",
+			].join("\n"),
+		);
+	}
+	if (missing.channel.length > 0)
+		console.error(
+			c.yellow(
+				`Warning: channel secrets not stored for the workspace: ${missing.channel.join(", ")}. The channel can't connect when this version goes live. Store them with: ${missing.channel.map(secretFixCommand).join(", ")}`,
+			),
+		);
+	return true;
 }
 
 // `deploy --no-activate`: stage a new version without flipping the live deployment.
@@ -1565,7 +1621,7 @@ async function deployStagedVersion(
 		// the agent with no runnable version, so the server activates it anyway.
 		outputSuccess(
 			agent,
-			`${c.green(`Deployed: ${agent.name} ${vLabel}`)} ${c.dim("(first version is always live)")}  ${c.dim(agent.id)}`,
+			`${c.green(`Deployed: ${agent.name} ${vLabel}`)} ${c.dim("(first version is always live)")}  ${c.dim(agent.id)}${channelLines(agent.channels)}`,
 			args,
 		);
 		return;
@@ -1611,14 +1667,14 @@ const agentsList = defineCommand({
 const agentsGet = defineCommand({
 	meta: { name: "get", description: "Get agent details" },
 	args: {
-		id: { type: "positional", required: true },
+		id: { type: "positional", description: "Agent name or id", required: true },
 		json: { type: "boolean" },
 		server: { type: "string" },
 	},
 	async run({ args }) {
 		requireAuth(args);
 		try {
-			const res = await apiFetch(resolveServer(args), `/agents/${args.id}`);
+			const res = await apiFetch(resolveServer(args), `/agents/${encodeURIComponent(args.id)}`);
 			output(await res.json(), args);
 		} catch (err) {
 			handleError(err);
@@ -1629,7 +1685,7 @@ const agentsGet = defineCommand({
 const agentsUpdate = defineCommand({
 	meta: { name: "update", description: "Update an agent's config" },
 	args: {
-		id: { type: "positional", required: true },
+		id: { type: "positional", description: "Agent name or id", required: true },
 		file: { type: "string", required: true },
 		secret: {
 			type: "string",
@@ -1651,7 +1707,9 @@ const agentsUpdate = defineCommand({
 			);
 			outputSuccess(
 				agent,
-				c.green(`Updated: ${agent.name}${agent.version ? ` v${agent.version}` : ""} (${agent.id})`),
+				c.green(
+					`Updated: ${agent.name}${agent.version ? ` v${agent.version}` : ""} (${agent.id})`,
+				) + channelLines(agent.channels),
 				args,
 			);
 		} catch (err) {
@@ -1663,14 +1721,16 @@ const agentsUpdate = defineCommand({
 const agentsDelete = defineCommand({
 	meta: { name: "delete", description: "Delete an agent" },
 	args: {
-		id: { type: "positional", required: true },
+		id: { type: "positional", description: "Agent name or id", required: true },
 		json: { type: "boolean" },
 		server: { type: "string" },
 	},
 	async run({ args }) {
 		requireAuth(args);
 		try {
-			await apiFetch(resolveServer(args), `/agents/${args.id}`, { method: "DELETE" });
+			await apiFetch(resolveServer(args), `/agents/${encodeURIComponent(args.id)}`, {
+				method: "DELETE",
+			});
 			outputSuccess({ deleted: true, id: args.id }, c.green(`Deleted: ${args.id}`), args);
 		} catch (err) {
 			handleError(err);
@@ -1861,8 +1921,17 @@ const promote = defineCommand({
 					body: JSON.stringify({ version: args.version }),
 				},
 			);
-			const data = (await res.json()) as { id: string; name: string; version: number };
-			outputSuccess(data, c.green(`Promoted ${data.name} to v${data.version} (live)`), args);
+			const data = (await res.json()) as {
+				id: string;
+				name: string;
+				version: number;
+				channels?: ChannelResult[];
+			};
+			outputSuccess(
+				data,
+				c.green(`Promoted ${data.name} to v${data.version} (live)`) + channelLines(data.channels),
+				args,
+			);
 		} catch (err) {
 			handleError(err);
 		}
@@ -1916,18 +1985,7 @@ const tryRun = defineCommand({
 		const timeoutSec = parseInt(args.timeout, 10) || 120;
 		const result = await collectTurn(wsUrl, sessionId, args.message, timeoutSec);
 
-		if (result.status === "timeout") {
-			if (wantsJson(json)) console.log(JSON.stringify(result));
-			else console.error(c.yellow(`Timeout after ${timeoutSec}s. Session: ${sessionId}`));
-			process.exit(EXIT_TIMEOUT);
-		}
-		if (result.status === "error") {
-			if (wantsJson(json)) console.log(JSON.stringify(result));
-			else console.error(c.red(`Error: ${result.error}`));
-			process.exit(EXIT_API);
-		}
-
-		outputSuccess(result, result.response, json);
+		exitWithTurn(result, json, timeoutSec);
 	},
 });
 
@@ -2174,21 +2232,21 @@ const instances = defineCommand({
 const sessionsList = defineCommand({
 	meta: { name: "list", description: "List sessions" },
 	args: {
-		agent: { type: "string" },
-		status: { type: "string" },
-		limit: { type: "string", default: "20" },
+		agent: { type: "string", description: "Only this agent's sessions (name or id)" },
+		status: { type: "string", description: "Only sessions with this status, e.g. running" },
+		limit: { type: "string", description: "How many to show", default: "20" },
 		json: { type: "boolean" },
 		server: { type: "string" },
 	},
 	async run({ args }) {
 		requireAuth(args);
-		const params = new URLSearchParams();
-		if (args.agent) params.set("agent_id", args.agent);
-		if (args.status) params.set("status", args.status);
-		params.set("limit", args.limit);
-		const qs = params.toString();
+		const server = resolveServer(args);
 		try {
-			const res = await apiFetch(resolveServer(args), `/sessions${qs ? `?${qs}` : ""}`);
+			const params = new URLSearchParams();
+			if (args.agent) params.set("agent_id", await resolveAgentId(server, args.agent));
+			if (args.status) params.set("status", args.status);
+			params.set("limit", args.limit);
+			const res = await apiFetch(server, `/sessions?${params.toString()}`);
 			const list = (await res.json()) as Record<string, unknown>[];
 			if (wantsJson(args)) {
 				console.log(JSON.stringify(list));
@@ -2254,7 +2312,7 @@ const sessionsMessages = defineCommand({
 const sessionsCreate = defineCommand({
 	meta: { name: "create", description: "Create a new session" },
 	args: {
-		agent: { type: "positional", required: true },
+		agent: { type: "positional", description: "Agent name or id", required: true },
 		instance: { type: "string", description: "Target a named instance (default: main)" },
 		json: { type: "boolean" },
 		server: { type: "string" },
@@ -2293,8 +2351,8 @@ const sessions = defineCommand({
 const chat = defineCommand({
 	meta: { name: "chat", description: "Interactive chat REPL (for humans)" },
 	args: {
-		agent: { type: "string", description: "Agent ID (creates new session)" },
-		session: { type: "string", description: "Resume existing session" },
+		agent: { type: "string", description: "Agent name or id (opens a new session)" },
+		session: { type: "string", description: "Resume an existing session id" },
 		server: { type: "string" },
 	},
 	async run({ args }) {
@@ -2318,25 +2376,27 @@ const chat = defineCommand({
 		const wsUrl = server.replace("https://", "wss://").replace("http://", "ws://");
 		let ws: WebSocket;
 		let busy = false;
-		let hasOutput = false;
 		let turnTimer: ReturnType<typeof setTimeout> | null = null;
+		const printer = new ChatPrinter((text) => process.stdout.write(text), c);
 
-		const resetTimer = () => {
-			if (turnTimer) clearTimeout(turnTimer);
-			turnTimer = setTimeout(() => {
-				if (busy) {
-					busy = false;
-					hasOutput = false;
-					process.stdout.write("\n");
-					rl.prompt();
-				}
-			}, 60_000);
-		};
 		const clearTimer = () => {
 			if (turnTimer) {
 				clearTimeout(turnTimer);
 				turnTimer = null;
 			}
+		};
+		// The turn (or inline command) is over: end its output and prompt again.
+		const turnDone = () => {
+			clearTimer();
+			busy = false;
+			printer.endTurn();
+			rl.prompt();
+		};
+		const resetTimer = () => {
+			if (turnTimer) clearTimeout(turnTimer);
+			turnTimer = setTimeout(() => {
+				if (busy) turnDone();
+			}, 60_000);
 		};
 
 		const rl = createInterface({
@@ -2355,93 +2415,59 @@ const chat = defineCommand({
 					if (!busy) reject(new Error("WebSocket connection failed"));
 				});
 				ws.addEventListener("close", () => {
-					if (busy) {
-						busy = false;
-						hasOutput = false;
-						process.stdout.write("\n");
-						rl.prompt();
-					}
+					if (busy) turnDone();
 				});
 				ws.addEventListener("message", (ev) => {
 					if (busy) resetTimer();
-					let event: { type: string; [k: string]: unknown };
+					let frame: SessionFrame;
 					try {
-						event = JSON.parse(String(ev.data));
+						frame = JSON.parse(String(ev.data));
 					} catch {
 						return;
 					}
-					switch (event.type) {
-						case "text":
-						case "message":
-						case "content_block_delta":
-						case "delta": {
-							const chunk = (event.text ?? event.delta ?? event.content ?? "") as string;
-							if (!chunk) break;
-							if (!hasOutput) {
-								hasOutput = true;
-								process.stdout.write(c.green("▸ "));
-							}
-							process.stdout.write(chunk);
+					switch (frame.type) {
+						case "tool_call":
+							printer.toolCall(frame);
 							break;
-						}
-						case "tool_call": {
-							if (!hasOutput) hasOutput = true;
-							const name = (event.name ?? "tool") as string;
-							process.stdout.write(
-								`\n${c.dim(`  [tool] ${name}(${JSON.stringify(event.arguments ?? event.input ?? {}).slice(0, 100)})`)}`,
-							);
-							break;
-						}
 						case "tool_result":
-							process.stdout.write(
-								`\n${c.dim(`  [result] ${JSON.stringify(event.result ?? event.output ?? event).slice(0, 100)}`)}`,
-							);
+							printer.toolResult(frame);
 							break;
 						case "turn_end":
-							clearTimer();
-							busy = false;
-							hasOutput = false;
-							process.stdout.write("\n\n");
-							rl.prompt();
+							turnDone();
 							break;
 						case "command_result": {
 							// A slash command's outcome (server-side; docs: slash-commands).
 							// Arrives before the executed ack for an inline command, or
 							// after the running turn for a queued one.
-							const name = String(event.name ?? "");
-							const text = String(event.reply ?? event.error ?? "");
-							const label = event.ok ? c.dim(`  [/${name}]`) : c.red(`  [/${name} failed]`);
-							process.stdout.write(`\n${label}${text ? ` ${text}` : ""}\n`);
+							const name = String(frame.name ?? "");
+							const text = String(frame.reply ?? frame.error ?? "");
+							const label = frame.ok ? c.dim(`  [/${name}]`) : c.red(`  [/${name} failed]`);
+							printer.line(`${label}${text ? ` ${text}` : ""}`);
 							break;
 						}
 						case "message_ack": {
-							const warnings = Array.isArray(event.warnings)
-								? (event.warnings as { code?: string; message?: string }[])
+							const warnings = Array.isArray(frame.warnings)
+								? (frame.warnings as { code?: string; message?: string }[])
 								: [];
 							for (const warning of warnings) {
 								if (warning.code === "unknown_command" && warning.message) {
-									process.stdout.write(`\n${c.yellow(`  ${warning.message}`)}\n`);
+									printer.line(c.yellow(`  ${warning.message}`));
 								}
 							}
 							// An inline slash command has no turn, so no turn_end follows.
-							if (event.status === "executed") {
-								clearTimer();
-								busy = false;
-								hasOutput = false;
-								process.stdout.write("\n");
-								rl.prompt();
-							}
+							if (frame.status === "executed") turnDone();
 							break;
 						}
 						case "error":
-							clearTimer();
-							console.error(
-								`\n${c.red(`Error: ${(event.error ?? event.message ?? event.reason ?? "unknown") as string}`)}`,
+							printer.line(
+								c.red(
+									`Error: ${String(frame.error ?? frame.message ?? frame.reason ?? "unknown")}`,
+								),
 							);
-							busy = false;
-							hasOutput = false;
-							rl.prompt();
+							turnDone();
 							break;
+						default:
+							printer.text(frameText(frame));
 					}
 				});
 			});
@@ -2479,7 +2505,6 @@ const chat = defineCommand({
 			}
 			if (busy) return;
 			busy = true;
-			hasOutput = false;
 			if (ws.readyState !== WebSocket.OPEN) {
 				console.log(c.yellow("Reconnecting..."));
 				try {
@@ -2507,42 +2532,59 @@ const chat = defineCommand({
 // ── Commands: logs ──────────────────────────────────────────────────
 
 const logs = defineCommand({
-	meta: { name: "logs", description: "Show session events and logs" },
+	meta: { name: "logs", description: "Show a session's events and log records" },
 	args: {
-		session: { type: "positional", required: true },
+		session: { type: "positional", description: "Session id", required: true },
 		json: { type: "boolean" },
 		server: { type: "string" },
 	},
 	async run({ args }) {
 		requireAuth(args);
+		const server = resolveServer(args);
+		const base = `/sessions/${encodeURIComponent(args.session)}`;
 		try {
-			const [eventsRes, logsRes] = await Promise.all([
-				apiFetch(resolveServer(args), `/sessions/${args.session}/events`),
-				apiFetch(resolveServer(args), `/sessions/${args.session}/logs`),
+			const [{ events, earliestAvailableSeq }, logEntries] = await Promise.all([
+				readAllEvents(async (sinceSeq) => {
+					const res = await apiFetch(server, `${base}/events?since_seq=${sinceSeq}&limit=1000`);
+					return (await res.json()) as EventsPage;
+				}),
+				apiFetch(server, `${base}/logs`).then(
+					async (res) => (await res.json()) as Record<string, unknown>[],
+				),
 			]);
-			const events = (await eventsRes.json()) as Record<string, unknown>[];
-			const logEntries = (await logsRes.json()) as Record<string, unknown>[];
 			if (wantsJson(args)) {
-				console.log(JSON.stringify({ events, logs: logEntries }));
+				console.log(
+					JSON.stringify({
+						events,
+						logs: logEntries,
+						...(earliestAvailableSeq !== undefined ? { earliestAvailableSeq } : {}),
+					}),
+				);
 				return;
 			}
-			if (events.length > 0) {
-				console.log(c.bold("Events"));
-				for (const e of events) {
-					const ts = c.dim(String(e.created_at ?? "").slice(11, 19));
-					const data = typeof e.data === "string" ? e.data : JSON.stringify(e.data);
-					console.log(`  ${ts}  ${c.dim(`[${e.seq}]`)} ${e.type}  ${String(data).slice(0, 80)}`);
-				}
+			if (events.length === 0 && logEntries.length === 0) {
+				console.log(c.dim(`No events or logs for ${args.session} yet.`));
+				return;
 			}
-			if (logEntries.length > 0) {
-				console.log(c.bold("\nLogs"));
-				for (const l of logEntries) {
-					const ts = c.dim(String(l.created_at ?? "").slice(11, 19));
-					const data = typeof l.data === "string" ? l.data : JSON.stringify(l.data);
-					console.log(`  ${ts}  ${l.type}  ${String(data).slice(0, 100)}`);
-				}
+			const time = (row: Record<string, unknown>) =>
+				c.dim(String(row.created_at ?? "").slice(11, 19));
+			const dataText = (row: Record<string, unknown>) =>
+				typeof row.data === "string" ? row.data : JSON.stringify(row.data ?? "");
+
+			console.log(c.bold("Events"));
+			// Sessions keep a window of recent events; say so when older ones are gone.
+			if (earliestAvailableSeq !== undefined && earliestAvailableSeq > 1)
+				console.log(c.dim(`  (events before #${earliestAvailableSeq} are no longer kept)`));
+			if (events.length === 0) console.log(c.dim("  (none)"));
+			for (const e of events) {
+				console.log(`  ${time(e)}  ${c.dim(`[${e.seq}]`)} ${e.type}  ${dataText(e).slice(0, 80)}`);
 			}
-			if (events.length === 0 && logEntries.length === 0) console.log(c.dim("No events or logs."));
+
+			console.log(c.bold("\nLogs"));
+			if (logEntries.length === 0) console.log(c.dim("  (none)"));
+			for (const l of logEntries) {
+				console.log(`  ${time(l)}  ${l.type}  ${dataText(l).slice(0, 100)}`);
+			}
 		} catch (err) {
 			handleError(err);
 		}
@@ -2596,6 +2638,7 @@ const apiKeysList = defineCommand({
 				list.map((k) => ({
 					id: k.id,
 					name: k.name,
+					scope: k.scopes ?? "",
 					prefix: k.key_prefix,
 					created: String(k.created_at ?? "").slice(0, 10),
 					last_used: String(k.last_used_at ?? "never").slice(0, 10),
@@ -2607,32 +2650,42 @@ const apiKeysList = defineCommand({
 	},
 });
 
+const KEY_SCOPES = ["read", "write", "admin"];
+
 const apiKeysCreate = defineCommand({
 	meta: { name: "create", description: "Create a new API key" },
 	args: {
-		name: { type: "positional", required: true },
+		name: { type: "positional", description: "A name to recognize the key by", required: true },
+		scope: {
+			type: "string",
+			description: "What the key may do: read, write or admin (default: write)",
+		},
 		json: { type: "boolean" },
 		server: { type: "string" },
 	},
 	async run({ args }) {
 		requireAuth(args);
+		if (args.scope !== undefined && !KEY_SCOPES.includes(args.scope))
+			fail(`--scope must be one of: ${KEY_SCOPES.join(", ")}`, EXIT_CLI);
 		try {
 			const res = await apiFetch(resolveServer(args), "/api-keys", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ name: args.name }),
+				// Without --scope the server picks its default (write).
+				body: JSON.stringify({ name: args.name, ...(args.scope ? { scopes: args.scope } : {}) }),
 			});
 			const key = (await res.json()) as {
 				id: string;
 				name: string;
 				key: string;
 				key_prefix: string;
+				scopes?: string;
 			};
 			if (wantsJson(args)) {
 				console.log(JSON.stringify(key));
 				return;
 			}
-			console.log(c.green(`Created: ${key.name}`));
+			console.log(c.green(`Created: ${key.name}${key.scopes ? ` (${key.scopes})` : ""}`));
 			console.log(`\n  ${c.bold(key.key)}\n`);
 			console.log(c.yellow("  Save this key — it won't be shown again."));
 		} catch (err) {
@@ -2776,7 +2829,7 @@ const providerKeys = defineCommand({
 
 // ── Commands: secrets ──────────────────────────────────────────────
 // Named secrets referenced from agent.yaml as `${NAME}`. Org-scoped by
-// default; `--agent <id>` scopes a value to one agent (overrides org).
+// default; `--agent <name or id>` scopes a value to one agent (overrides org).
 
 const secretsList = defineCommand({
 	meta: { name: "list", description: "List secrets (values never leave the server)" },
@@ -2807,7 +2860,7 @@ const secretsSet = defineCommand({
 	meta: { name: "set", description: "Set a secret (reads the same-named env var by default)" },
 	args: {
 		name: { type: "positional", required: true, description: "Secret name, e.g. E2B_API_KEY" },
-		agent: { type: "string", description: "Scope the value to one agent id" },
+		agent: { type: "string", description: "Scope the value to one agent (name or id)" },
 		"from-env": { type: "string", description: "Read the value from a different env var" },
 		stdin: { type: "boolean", description: "Read the value from stdin" },
 		json: { type: "boolean" },
@@ -2821,13 +2874,15 @@ const secretsSet = defineCommand({
 				fromEnv: args.stdin ? undefined : (args["from-env"] ?? args.name),
 				stdin: args.stdin,
 			});
-			const res = await apiFetch(resolveServer(args), "/secrets", {
+			const server = resolveServer(args);
+			const agentId = args.agent ? await resolveAgentId(server, args.agent) : undefined;
+			const res = await apiFetch(server, "/secrets", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
 					name: args.name,
 					value: secret.value,
-					...(args.agent ? { agentId: args.agent } : {}),
+					...(agentId ? { agentId } : {}),
 				}),
 			});
 			const data = (await res.json()) as {
@@ -2852,21 +2907,29 @@ const secretsUnset = defineCommand({
 	meta: { name: "unset", description: "Remove a secret by name" },
 	args: {
 		name: { type: "positional", required: true },
-		agent: { type: "string", description: "Remove the agent-scoped value instead of the org one" },
+		agent: {
+			type: "string",
+			description: "Remove this agent's own value (name or id) instead of the org one",
+		},
 		json: { type: "boolean" },
 		server: { type: "string" },
 	},
 	async run({ args }) {
 		requireAuth(args);
 		try {
-			const list = await listSecrets(resolveServer(args));
-			const agentId = args.agent ?? "";
-			const row = list.find((secret) => secret.name === args.name && secret.agent_id === agentId);
+			const server = resolveServer(args);
+			const [list, agentId] = await Promise.all([
+				listSecrets(server),
+				args.agent ? resolveAgentId(server, args.agent) : "",
+			]);
+			const row = list.find(
+				(secret) => secret.name === args.name && secret.agent_id === agentId && !secret.instance_id,
+			);
 			if (!row) {
 				const scope = agentId ? `agent:${agentId}` : "org";
 				fail(`Secret not found: ${args.name} (${scope})`, EXIT_CLI);
 			}
-			await apiFetch(resolveServer(args), `/secrets/${row.id}`, { method: "DELETE" });
+			await apiFetch(server, `/secrets/${row.id}`, { method: "DELETE" });
 			outputSuccess(
 				{ deleted: true, id: row.id, name: row.name, agent_id: row.agent_id },
 				c.green(`Unset: ${row.name}`),
@@ -3166,10 +3229,10 @@ function printHelp(): void {
 ${c.bold("PAREL")} ${d(`v${VERSION}`)} — deploy and manage AI agents
 
 ${c.bold("QUICK START")}
-  ${g("parel send")} --agent <id> -m "text"     Send message, wait for response
+  ${g("parel send")} --agent <agent> -m "text"   Send message, wait for response
   ${g("parel run")}  agent.yaml -m "text"        Deploy + send in one shot
   ${g("parel try")}  <agent> -m "text"           Throwaway run ${d("(ephemeral)")}
-  ${g("parel chat")} --agent <id>                Interactive REPL ${d("(for humans)")}
+  ${g("parel chat")} --agent <agent>             Interactive REPL ${d("(for humans)")}
 
 ${c.bold("ENVIRONMENT")}
   ${g("PAREL_API_KEY")}     API key ${d("(alternative to parel login)")}
@@ -3188,7 +3251,7 @@ ${c.bold("COMMANDS")}
   ${g("api-keys")}, ${g("billing")}          Account management
   ${g("login")}, ${g("whoami")}, ${g("config")}      Authentication and settings
 
-${d("Run parel <command> -h for command-specific help.")}
+${d("Run parel <command> -h for command-specific help. Docs: https://parel.sh/docs/cli")}
 `);
 }
 

@@ -20,6 +20,35 @@
     "description": {
       "type": "string"
     },
+    "runtime": {
+      "type": "string",
+      "enum": ["edge", "nodejs"],
+      "default": "edge",
+      "description": "Where the plugin runs. \"edge\" (the default) loads it in the shared edge plugin runtime; \"nodejs\" opts into a Node.js sidecar host, for plugins with native or heavy runtime needs."
+    },
+    "type": {
+      "type": "string",
+      "enum": ["channel"],
+      "description": "Set to \"channel\" for a channel connector package (its default export is a ChannelConnector)."
+    },
+    "channel": {
+      "type": "object",
+      "description": "Channel connector metadata, for packages with type \"channel\".",
+      "properties": {
+        "connectionTypes": {
+          "type": "array",
+          "items": { "enum": ["webhook", "managed_ws"] },
+          "uniqueItems": true,
+          "description": "Connection transports this connector supports."
+        },
+        "sources": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Event sources this connector emits (e.g. \"slack.socket\")."
+        }
+      },
+      "additionalProperties": false
+    },
     "provides": {
       "type": "object",
       "properties": {
