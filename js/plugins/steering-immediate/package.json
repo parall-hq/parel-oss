@@ -2,6 +2,13 @@
   "name": "@parel/steering-immediate",
   "version": "0.0.30",
   "description": "PAREL plugin for immediate steering and interruption inputs.",
+  "keywords": [
+    "parel",
+    "ai-agents",
+    "agent-runtime",
+    "parel-plugin",
+    "interrupt"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -11,7 +18,7 @@
   "bugs": {
     "url": "https://github.com/parall-hq/parel-oss/issues"
   },
-  "homepage": "https://github.com/parall-hq/parel-oss#readme",
+  "homepage": "https://parel.sh/docs",
   "type": "module",
   "exports": {
     ".": {

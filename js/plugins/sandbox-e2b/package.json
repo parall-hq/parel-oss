@@ -2,6 +2,14 @@
   "name": "@parel/sandbox-e2b",
   "version": "0.8.6",
   "description": "PAREL sandbox plugin for E2B code interpreter execution.",
+  "keywords": [
+    "parel",
+    "ai-agents",
+    "agent-runtime",
+    "parel-plugin",
+    "sandbox",
+    "e2b"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -11,7 +19,7 @@
   "bugs": {
     "url": "https://github.com/parall-hq/parel-oss/issues"
   },
-  "homepage": "https://github.com/parall-hq/parel-oss#readme",
+  "homepage": "https://parel.sh/docs",
   "type": "module",
   "exports": {
     ".": {
