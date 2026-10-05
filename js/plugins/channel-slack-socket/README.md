@@ -14,15 +14,41 @@ npm install @parel/channel-slack-socket
 
 ## Usage
 
-```json
-{
-  "type": "managed_ws",
-  "plugin": "@parel/channel-slack-socket",
-  "start": true
-}
+Declare the connection in `agent.yaml`; deploying (or promoting) the version
+creates the `managed_ws` connection, binds it to the agent, and starts it:
+
+```yaml
+channels:
+  - type: managed_ws
+    plugin: "@parel/channel-slack-socket"
+    config:
+      appToken: ${SLACK_APP_TOKEN}
+      botToken: ${SLACK_BOT_TOKEN}
+    routing:
+      mode: per_subject
 ```
 
-Store the Slack app-level token as `appToken` and bot token as `botToken`.
+| Key | Meaning |
+|---|---|
+| `appToken` | Slack app-level token with `connections:write`, used to open the Socket Mode connection. Secret. |
+| `botToken` | Slack bot token, used for Web API delivery such as `chat.postMessage`. Secret. |
+
+Both tokens are secrets, so write them as `${NAME}` references. Channel secrets
+are read from the workspace's stored secrets and `parel deploy` does not upload
+them from your shell, so store them first (needs an Admin-scope API key):
+
+```bash
+export SLACK_APP_TOKEN=xapp-...
+export SLACK_BOT_TOKEN=xoxb-...
+parel secrets set SLACK_APP_TOKEN
+parel secrets set SLACK_BOT_TOKEN
+parel deploy ./agent.yaml
+```
+
+An always-on `managed_ws` connection needs the Hobby or Pro plan. The same
+connection can be created through the HTTP API (`POST /channels/connections`
+and `POST /channels/bindings`); see the
+[API reference](https://parel.sh/docs/api#channels).
 
 ## SDK usage
 

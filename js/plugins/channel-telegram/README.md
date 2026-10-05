@@ -14,16 +14,48 @@ npm install @parel/channel-telegram
 
 ## Usage
 
-```json
-{
-  "type": "webhook",
-  "plugin": "@parel/channel-telegram"
-}
+Declare the connection in `agent.yaml`; deploying (or promoting) the version
+creates the `webhook` connection and binds it to the agent:
+
+```yaml
+channels:
+  - type: webhook
+    plugin: "@parel/channel-telegram"
+    config:
+      botToken: ${TELEGRAM_BOT_TOKEN}
+      webhookSecret: ${TELEGRAM_WEBHOOK_SECRET}
+    routing:
+      mode: per_subject
 ```
 
-Configure Telegram with the platform webhook URL and optionally pass a
-`secret_token`. Store the bot token as the `botToken` plugin secret and the
-webhook token as `webhookSecret`.
+| Key | Meaning |
+|---|---|
+| `botToken` | Telegram bot token from BotFather, used for Bot API delivery. Secret. |
+| `webhookSecret` | The `secret_token` you give Telegram's `setWebhook`; checked against the `X-Telegram-Bot-Api-Secret-Token` header. Secret. PAREL requires it for webhook connections. |
+
+Both values are secrets, so write them as `${NAME}` references. Channel secrets
+are read from the workspace's stored secrets and `parel deploy` does not upload
+them from your shell, so store them first (needs an Admin-scope API key):
+
+```bash
+export TELEGRAM_BOT_TOKEN=123456:ABC-...
+export TELEGRAM_WEBHOOK_SECRET=$(openssl rand -hex 32)
+parel secrets set TELEGRAM_BOT_TOKEN
+parel secrets set TELEGRAM_WEBHOOK_SECRET
+parel deploy ./agent.yaml --json   # the result lists the connection id (chn_...)
+```
+
+Then point Telegram at the connection's webhook URL, passing the same secret:
+
+```bash
+curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
+  -d url=https://api.parel.sh/webhooks/channels/chn_... \
+  -d secret_token=$TELEGRAM_WEBHOOK_SECRET
+```
+
+The same connection can be created through the HTTP API
+(`POST /channels/connections` and `POST /channels/bindings`); see the
+[API reference](https://parel.sh/docs/api#channels).
 
 ## SDK usage
 
