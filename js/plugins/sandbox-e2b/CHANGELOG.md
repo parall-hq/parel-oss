@@ -1,5 +1,15 @@
 # @parel/sandbox-e2b
 
+## 0.8.7
+
+### Patch Changes
+
+- aec1eec: docs: refresh package READMEs and npm metadata (homepage https://parel.sh/docs, keywords). Plugin READMEs now use `${NAME}` secret references instead of literal keys, document `budget-cap` options, explain that steering is built into the runtime, and flag sandbox plugins that are not runnable or not yet verified on hosted PAREL.
+- 8aaf357: Pin `@e2b/code-interpreter` to 2.7.2. Plugin dependency ranges are resolved when the hosted runtime bundles the plugin, and `^2.6.1` now resolves to 2.8.0, which imports `E2B` from `e2b` — an export the pinned `e2b@2.32.0` doesn't have. The bundle failed ("No matching export … for import \"E2B\""), so every fresh deploy of sandbox-e2b returned 500 since 2026-09-09. 2.7.2 only imports names 2.32.0 exports. Move both pins together when `e2b` is unpinned.
+- Updated dependencies [aec1eec]
+  - @parel/capability-sandbox@0.4.1
+  - @parel/plugin-sdk@0.17.2
+
 ## 0.8.6
 
 ### Patch Changes

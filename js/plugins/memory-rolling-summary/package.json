@@ -1,6 +1,6 @@
 {
   "name": "@parel/memory-rolling-summary",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "PAREL plugin for rolling conversation memory summaries.",
   "keywords": [
     "parel",

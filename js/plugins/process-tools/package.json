@@ -1,6 +1,6 @@
 {
   "name": "@parel/process-tools",
-  "version": "0.1.22",
+  "version": "0.1.23",
   "description": "Workspace background process tools for PAREL coding agents.",
   "keywords": [
     "parel",

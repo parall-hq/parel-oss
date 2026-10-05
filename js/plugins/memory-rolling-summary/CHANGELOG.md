@@ -1,5 +1,13 @@
 # @parel/memory-rolling-summary
 
+## 0.3.3
+
+### Patch Changes
+
+- aec1eec: docs: refresh package READMEs and npm metadata (homepage https://parel.sh/docs, keywords). Plugin READMEs now use `${NAME}` secret references instead of literal keys, document `budget-cap` options, explain that steering is built into the runtime, and flag sandbox plugins that are not runnable or not yet verified on hosted PAREL.
+- Updated dependencies [aec1eec]
+  - @parel/plugin-sdk@0.17.2
+
 ## 0.3.2
 
 ### Patch Changes
