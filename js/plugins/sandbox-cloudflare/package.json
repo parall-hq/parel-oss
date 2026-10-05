@@ -2,6 +2,14 @@
   "name": "@parel/sandbox-cloudflare",
   "version": "0.2.20",
   "description": "PAREL sandbox capability provider plugin for Cloudflare Sandbox.",
+  "keywords": [
+    "parel",
+    "ai-agents",
+    "agent-runtime",
+    "parel-plugin",
+    "sandbox",
+    "cloudflare-sandbox"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -11,7 +19,7 @@
   "bugs": {
     "url": "https://github.com/parall-hq/parel-oss/issues"
   },
-  "homepage": "https://github.com/parall-hq/parel-oss#readme",
+  "homepage": "https://parel.sh/docs",
   "type": "module",
   "exports": {
     ".": {

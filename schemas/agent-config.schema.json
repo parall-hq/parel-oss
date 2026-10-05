@@ -121,6 +121,8 @@
           ]
         },
         "checkpointInterval": {
+          "deprecated": true,
+          "description": "No longer used: the runtime ignores it. Kept so existing configs still validate; remove it from configs.",
           "oneOf": [
             {
               "type": "integer",

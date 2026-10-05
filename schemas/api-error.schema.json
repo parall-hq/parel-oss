@@ -13,7 +13,7 @@
     "code": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9_]*$",
-      "description": "Stable machine-readable error code; additive, optional. Lowercase snake_case (e.g. agent_not_found)."
+      "description": "Stable machine-readable error code; additive, optional. Lowercase snake_case (e.g. not_found, session_terminated). Codes are listed in protocol/http-api.md."
     },
     "request_id": {
       "type": "string"

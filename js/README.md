@@ -14,17 +14,26 @@ JavaScript and TypeScript packages for PAREL.
 
 ## Plugins
 
-- `@parel/system-static`
-- `@parel/memory-rolling-summary`
-- `@parel/security-basic`
-- `@parel/steering-immediate`
-- `@parel/budget-cap`
-- `@parel/subagent`
-- `@parel/sandbox-e2b`
-- `@parel/sandbox-daytona`
-- `@parel/sandbox-vercel`
-- `@parel/sandbox-modal`
-- `@parel/sandbox-cloudflare`
+Runtime plugins (listed in `agent.yaml` under `plugins`):
+
+- Prompt and memory: `@parel/system-static`, `@parel/memory-rolling-summary`
+- Guards and control: `@parel/security-basic`, `@parel/budget-cap`,
+  `@parel/steering-immediate`
+- Delegation: `@parel/subagent`
+- Sandboxes: `@parel/sandbox-e2b`, `@parel/sandbox-daytona`,
+  `@parel/sandbox-vercel`, `@parel/sandbox-modal`, `@parel/sandbox-cloudflare`
+- Coding agents: `@parel/coding-agent`, `@parel/workspace`,
+  `@parel/filesystem-tools`, `@parel/search-tools`, `@parel/edit-tools`,
+  `@parel/git-tools`, `@parel/shell-tools`, `@parel/process-tools`,
+  `@parel/port-tools`, `@parel/approval-tools`
+
+Channel connectors (listed in `agent.yaml` under `channels`):
+
+- `@parel/channel-slack-socket`
+- `@parel/channel-telegram`
+
+Which plugins run on hosted PAREL, and what each one needs, is listed at
+<https://parel.sh/docs/config#available-plugins>.
 
 ## Commands
 

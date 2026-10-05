@@ -43,7 +43,7 @@ Plugins receive a `PluginContext` with:
 | `store` | Plugin-scoped session store. |
 | `instanceStore` | Instance-scoped store shared across the sessions of one agent instance. Optional — `undefined` on hosts without instance storage. |
 | `instance` | Identity of the owning agent instance (`{ key, ephemeral }`). Optional. |
-| `inputs` | Session input queue for steering and interrupts. |
+| `inputs` | Session input queue: peek, drain, and push platform inputs by type (for example `interrupt` or `async_callback`). |
 | `log` | Plugin logger. |
 | `model` | Access to the configured model gateway. |
 | `hook` | Register lifecycle hooks. |

@@ -2,6 +2,14 @@
   "name": "@parel/coding-agent",
   "version": "0.1.22",
   "description": "Coding agent profile for PAREL.",
+  "keywords": [
+    "parel",
+    "ai-agents",
+    "agent-runtime",
+    "parel-plugin",
+    "coding-agent",
+    "system-prompt"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -11,7 +19,7 @@
   "bugs": {
     "url": "https://github.com/parall-hq/parel-oss/issues"
   },
-  "homepage": "https://github.com/parall-hq/parel-oss#readme",
+  "homepage": "https://parel.sh/docs",
   "type": "module",
   "exports": {
     ".": {

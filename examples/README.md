@@ -19,9 +19,9 @@ session starts. The reference is what lives in this file and in git — never
 the value. Literal secrets in config fields are rejected at deploy time.
 
 For values shared across agents (or CI machines without the env var), store
-them org-level once instead: `parel secrets set E2B_API_KEY` (reads the
-same-named env var by default). Deploys fall back to org-scoped values for any
-reference not found locally.
+them once for the whole workspace instead: `parel secrets set E2B_API_KEY`
+(reads the same-named env var by default; needs an Admin-scope key). Deploys
+fall back to workspace values for any reference not found locally.
 
 ## `agent.yaml` — a minimal agent
 
@@ -35,7 +35,7 @@ agent:
   name: hello-agent
 model:
   provider: anthropic
-  model: claude-sonnet-4-20250514
+  model: claude-sonnet-5
 plugins:
   - plugin: system-static
     config:
@@ -45,20 +45,47 @@ plugins:
       apiKey: ${E2B_API_KEY}
 ```
 
-Run it with the CLI. The CLI defaults to `https://api.parel.sh`; for another
-runtime, set `PAREL_SERVER=https://...` or pass `--server`.
+Run it with the CLI, which talks to `https://api.parel.sh`. Create a PAREL API
+key in the console under
+[Settings → API keys](https://parel.sh/console/settings/api-keys) first.
+
+PAREL holds no model keys: agents call the model with your own provider key,
+and the provider bills you directly. Add it in the console under
+[Settings → Model providers](https://parel.sh/console/settings/providers), or
+from the CLI with an Admin-scope API key:
 
 ```bash
 npm install -g @parel/cli
 parel login
-parel provider-keys set anthropic --from-env ANTHROPIC_API_KEY  # or use platform billing
+parel provider-keys set anthropic --from-env ANTHROPIC_API_KEY  # needs an Admin-scope key
 export E2B_API_KEY=e2b_...
 parel deploy ./agent.yaml   # uploads E2B_API_KEY from your environment
+parel chat --agent hello-agent
 ```
 
-If a referenced secret is missing everywhere (local env, agent store, org
-store), the deploy fails and the error tells you exactly what to set. To check
+If a referenced secret is missing everywhere (local env, agent secrets,
+workspace secrets), the deploy fails and the error tells you exactly what to set. To check
 beforehand: `parel capabilities doctor ./agent.yaml`.
+
+### Other model providers
+
+`model` picks the provider: `anthropic`, `openai`, `openai-responses`, or
+`openai-compatible` / `anthropic-compatible` for any endpoint that speaks those
+APIs. DeepSeek, for example:
+
+```yaml
+model:
+  provider: openai-compatible
+  model: deepseek-v4.1-flash
+  config:
+    baseUrl: https://api.deepseek.com/v1
+    credentialProvider: deepseek
+```
+
+Store the key once for the workspace with
+`parel provider-keys set deepseek --from-env DEEPSEEK_API_KEY`, or keep it with
+this agent by setting `apiKey: ${DEEPSEEK_API_KEY}` under `config`. See
+[`protocol/agent-config.md`](../protocol/agent-config.md#model-providers).
 
 ## `coding-agent.yaml` — a coding-agent bundle
 

@@ -1,8 +1,17 @@
 # PAREL Open Source
 
-**PAREL is a provider-neutral, policy-programmable runtime for long-running AI agents.** You describe an agent in a single `agent.yaml` — pick any model provider, then compose sandbox, memory, tool, policy, and channel plugins — and the runtime runs it. The kernel only dispatches; capabilities come from plugins.
+**PAREL is a provider-neutral, policy-programmable serverless runtime for AI agents.** You describe an agent in a single `agent.yaml` — pick any model provider, then compose sandbox, memory, tool, policy, and channel plugins — and deploy it. Agents and sessions are durable cloud objects, not processes you keep alive: an agent can run once, resume later, or keep durable state for as long as it needs. The kernel only dispatches; capabilities come from plugins.
 
-This repository holds the **public** pieces of that ecosystem: the SDKs, first-party plugins, the `parel` CLI, cross-language schemas, and protocol docs. The hosted runtime and control plane live in a separate, private repository.
+[Website](https://parel.sh) · [Docs](https://parel.sh/docs) · [Console](https://parel.sh/console) · [Get an API key](https://parel.sh/console/settings/api-keys)
+
+> **Bring your own model key.** PAREL holds no model keys and does not resell
+> model access. Add your own provider key (Anthropic, OpenAI, OpenRouter, or any
+> OpenAI- or Anthropic-compatible endpoint) in the console under
+> [Settings → Model providers](https://parel.sh/console/settings/providers), and
+> the provider bills you directly. PAREL plans (Free, Hobby, Pro) meter the
+> runtime itself by steps; see [pricing](https://parel.sh/pricing).
+
+This repository holds the **public** pieces of that ecosystem: the SDKs, first-party plugins, the `parel` CLI, cross-language schemas, and protocol docs. The PAREL runtime and control plane are a hosted service and are not part of this repository.
 
 Sandbox plugins share the public `@parel/capability-sandbox` contract so
 consumers can depend on `parel.sandbox` instead of provider-specific APIs. The
@@ -24,30 +33,35 @@ The layout is organized for a future multi-language ecosystem. JavaScript and Ty
 
 ## Quickstart
 
-Install the CLI from npm and connect it to a PAREL runtime.
+Install the CLI from npm, log in, add your model key, and deploy.
 
 Prerequisites:
 
 - Node.js 22 or newer.
-- A PAREL runtime API key. The CLI defaults to `https://api.parel.sh`; for a
-  self-hosted or staging runtime, set `PAREL_SERVER=https://...` or pass
-  `--server`.
-- Credentials for the capabilities your agent uses. The example below uses
-  Anthropic and E2B, so export `ANTHROPIC_API_KEY` and `E2B_API_KEY` before
-  running the setup commands.
+- A PAREL API key. Sign in to the [console](https://parel.sh/console) and
+  create one under [Settings → API keys](https://parel.sh/console/settings/api-keys).
+  The default Write scope can deploy and chat; setting a model key from the CLI
+  needs an Admin-scope key.
+- Your own model provider key. The example below uses Anthropic
+  (`ANTHROPIC_API_KEY`) and an E2B sandbox (`E2B_API_KEY`).
 
 ```bash
 npm install -g @parel/cli
-parel --help
-parel login                                             # paste your PAREL API key
+parel login                     # paste your PAREL API key (pk_...)
+
+# Add your model key. This needs an Admin-scope API key; or add the key in the
+# console under Settings → Model providers instead.
+export ANTHROPIC_API_KEY=sk-ant-...
 parel provider-keys set anthropic --from-env ANTHROPIC_API_KEY
+
 export E2B_API_KEY=e2b_...      # referenced as ${E2B_API_KEY} in agent.yaml; deploy uploads it
 parel capabilities doctor ./agent.yaml
-parel deploy ./agent.yaml                              # deploy an agent; prints its id
-parel chat --agent <id>                                # start an interactive session
+parel deploy ./agent.yaml       # creates hello-agent v1 and makes it live
+parel chat --agent hello-agent  # start an interactive session
 ```
 
-A minimal agent is described in a single `agent.yaml` — see [`examples/`](examples/):
+The CLI talks to `https://api.parel.sh`. A minimal agent is described in a
+single `agent.yaml` — see [`examples/`](examples/):
 
 ```yaml
 version: "1"
@@ -55,7 +69,7 @@ agent:
   name: hello-agent
 model:
   provider: anthropic
-  model: claude-sonnet-4-20250514
+  model: claude-sonnet-5
 plugins:
   - plugin: system-static
     config:
@@ -65,9 +79,12 @@ plugins:
       apiKey: ${E2B_API_KEY}
 ```
 
-The full config schema is [`schemas/agent-config.schema.json`](schemas/agent-config.schema.json).
-For a coding agent composition, see
-[`examples/coding-agent.yaml`](examples/coding-agent.yaml).
+Secret values never go in `agent.yaml`: write a `${NAME}` reference, and
+`parel deploy` uploads the value from your shell (or store it once with
+`parel secrets set NAME`). The full config schema is
+[`schemas/agent-config.schema.json`](schemas/agent-config.schema.json), and the
+guided reference is <https://parel.sh/docs/config>. For a coding agent
+composition, see [`examples/coding-agent.yaml`](examples/coding-agent.yaml).
 
 ## Building from source
 
@@ -92,4 +109,4 @@ workspace. The release process lives in
 
 Model providers are not runtime plugins. They are selected through PAREL's model provider layer. Runtime plugins provide hooks, tools, capabilities, memory, policy, sandbox, channel, and steering behavior.
 
-The hosted PAREL control plane and runtime implementation live outside this repository.
+The hosted PAREL control plane and runtime implementation live outside this repository. The public contracts they implement are documented in [`protocol/`](protocol/) and [`schemas/`](schemas/).

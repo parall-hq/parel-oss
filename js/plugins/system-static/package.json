@@ -2,6 +2,13 @@
   "name": "@parel/system-static",
   "version": "0.0.30",
   "description": "PAREL plugin for static system prompt injection.",
+  "keywords": [
+    "parel",
+    "ai-agents",
+    "agent-runtime",
+    "parel-plugin",
+    "system-prompt"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -11,7 +18,7 @@
   "bugs": {
     "url": "https://github.com/parall-hq/parel-oss/issues"
   },
-  "homepage": "https://github.com/parall-hq/parel-oss#readme",
+  "homepage": "https://parel.sh/docs",
   "type": "module",
   "exports": {
     ".": {

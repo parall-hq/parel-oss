@@ -4,6 +4,13 @@
 
 A first-party runtime plugin for [PAREL](https://github.com/parall-hq/parel-oss).
 
+> **Not runnable on hosted PAREL yet.** This plugin needs a Cloudflare Durable
+> Object namespace injected by the host, and the hosted PAREL runtime has no way
+> to inject one today, so its capabilities do not work there. Track
+> [parel-oss#38](https://github.com/parall-hq/parel-oss/issues/38). Use
+> [`@parel/sandbox-e2b`](https://github.com/parall-hq/parel-oss/tree/main/js/plugins/sandbox-e2b)
+> on hosted PAREL.
+
 ## Install
 
 ```bash

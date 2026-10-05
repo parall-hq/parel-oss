@@ -2,6 +2,14 @@
   "name": "@parel/shell-tools",
   "version": "0.1.22",
   "description": "Workspace-rooted shell tools for PAREL coding agents.",
+  "keywords": [
+    "parel",
+    "ai-agents",
+    "agent-runtime",
+    "parel-plugin",
+    "coding-agent",
+    "shell"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -11,7 +19,7 @@
   "bugs": {
     "url": "https://github.com/parall-hq/parel-oss/issues"
   },
-  "homepage": "https://github.com/parall-hq/parel-oss#readme",
+  "homepage": "https://parel.sh/docs",
   "type": "module",
   "exports": {
     ".": {

@@ -2,6 +2,13 @@
   "name": "@parel/core",
   "version": "0.19.0",
   "description": "Shared public TypeScript contracts for PAREL.",
+  "keywords": [
+    "parel",
+    "ai-agents",
+    "agent-runtime",
+    "typescript",
+    "contracts"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -11,7 +18,7 @@
   "bugs": {
     "url": "https://github.com/parall-hq/parel-oss/issues"
   },
-  "homepage": "https://github.com/parall-hq/parel-oss#readme",
+  "homepage": "https://parel.sh/docs",
   "type": "module",
   "exports": {
     ".": {

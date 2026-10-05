@@ -14,6 +14,9 @@
       "$ref": "#/$defs/sync"
     },
     {
+      "$ref": "#/$defs/messageAck"
+    },
+    {
       "$ref": "#/$defs/text"
     },
     {
@@ -36,6 +39,9 @@
     },
     {
       "$ref": "#/$defs/inputAbsorbed"
+    },
+    {
+      "$ref": "#/$defs/executionPause"
     },
     {
       "$ref": "#/$defs/commandResult"
@@ -140,6 +146,11 @@
               }
             }
           ]
+        },
+        "context": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Optional per-message invocation context, passed to plugins that consume it. Never enters the transcript."
         }
       },
       "additionalProperties": false
@@ -191,6 +202,94 @@
         },
         "running": {
           "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "messageAck": {
+      "description": "Answer to a client message frame. status: accepted (a turn started; turnId set), queued (waits for the running turn), or executed (a slash command ran without a turn; result set, no turn_end follows). A refused message gets an error frame instead.",
+      "type": "object",
+      "required": [
+        "type",
+        "status",
+        "inputId"
+      ],
+      "properties": {
+        "type": {
+          "const": "message_ack"
+        },
+        "status": {
+          "enum": [
+            "accepted",
+            "queued",
+            "executed"
+          ]
+        },
+        "inputId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        },
+        "command": {
+          "type": "object",
+          "description": "The recognized slash command, when the message named one.",
+          "required": [
+            "name"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "args": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
+        },
+        "result": {
+          "type": "object",
+          "description": "Outcome of a slash command that ran inline.",
+          "required": [
+            "ok"
+          ],
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "reply": {
+              "type": "string"
+            },
+            "error": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "durationMs": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": true
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": true
+          }
         }
       },
       "additionalProperties": false
@@ -270,6 +369,10 @@
         "type": {
           "const": "tool_call"
         },
+        "callId": {
+          "type": "string",
+          "description": "Pairs this call with its tool_result."
+        },
         "name": {
           "type": "string"
         },
@@ -292,6 +395,10 @@
         "type": {
           "const": "tool_result"
         },
+        "callId": {
+          "type": "string",
+          "description": "The callId of the tool_call this result answers."
+        },
         "name": {
           "type": "string"
         },
@@ -300,6 +407,31 @@
         },
         "isError": {
           "type": "boolean"
+        },
+        "durationMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "refs": {
+          "type": "array",
+          "description": "References to content stored outside the transcript (for example sandbox paths).",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "fullContentRef": {
+          "type": "object",
+          "description": "Reference to the full output when content was truncated.",
+          "additionalProperties": true
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "True when content was cut to runtime.toolResultMaxBytes."
+        },
+        "originalByteLength": {
+          "type": "integer",
+          "minimum": 0
         }
       },
       "additionalProperties": false
@@ -346,6 +478,68 @@
         "stepNumber": {
           "type": "integer",
           "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "executionPause": {
+      "description": "The session stopped at an execution pause policy (breakpoint). pause is the same object GET /execution/pauses/{pauseId} returns. turn_end follows; the session stays suspended until the pause is resumed or cancelled.",
+      "type": "object",
+      "required": [
+        "type",
+        "pause"
+      ],
+      "properties": {
+        "type": {
+          "const": "execution_pause"
+        },
+        "pause": {
+          "type": "object",
+          "required": [
+            "id",
+            "sessionId",
+            "snapshotId",
+            "anchor",
+            "status"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "policyId": {
+              "type": "string"
+            },
+            "snapshotId": {
+              "type": "string"
+            },
+            "anchor": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "payload": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "resumePayload": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "createdAt": {
+              "type": "string"
+            },
+            "resumedAt": {
+              "type": "string"
+            },
+            "cancelledAt": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
         }
       },
       "additionalProperties": false
@@ -410,6 +604,11 @@
         },
         "error": {
           "type": "string"
+        },
+        "code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Stable machine-readable error code (see api-error.schema.json). Optional; tolerate unknown values."
         }
       },
       "additionalProperties": false
