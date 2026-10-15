@@ -13,8 +13,8 @@ agent:
   name: hello-agent
 
 model:
-  provider: anthropic
-  model: claude-sonnet-5
+  provider: parel
+  model: anthropic/claude-sonnet-5.5
 
 plugins:
   - plugin: system-static
@@ -64,16 +64,22 @@ without an error, so validate against the schema to catch misspellings.
 
 | `provider` | API family | Provider key it uses |
 | --- | --- | --- |
+| `parel` | PAREL-hosted models, by OpenRouter model id (e.g. `anthropic/claude-sonnet-5.5`) | none: PAREL's, billed to the workspace |
 | `anthropic` | Anthropic Messages API | `anthropic` |
 | `openai` | OpenAI Chat Completions API | `openai` |
 | `openai-responses` | OpenAI Responses API | `openai` |
 | `openai-compatible` | OpenAI Chat Completions API at `config.baseUrl` | `config.credentialProvider` (default: the provider name) |
 | `anthropic-compatible` | Anthropic Messages API at `config.baseUrl` | `config.credentialProvider` (default: the provider name) |
 
-PAREL does not supply model keys. A model call uses `model.config.apiKey` when
-it is set, otherwise the workspace's provider key for the credential provider
-in the table, added in the console under Settings → Model providers or with
-`parel provider-keys set`. With neither, the turn fails with `provider_auth`.
+`parel` needs no key: the hosted service supplies it and bills each call to the
+workspace at the model provider's price, with no markup. Its endpoint, key and
+wire format are fixed: `config.baseUrl`, `config.apiKey` and
+`config.credentialProvider` are rejected, and no other provider can use its key.
+For the other providers, a model call uses `model.config.apiKey` when it is set,
+otherwise the workspace's provider key for the credential provider in the table,
+added in the console under Settings → Model providers or with
+`parel provider-keys set`. With neither, the turn fails with `provider_auth`; it
+never falls back to `parel`.
 
 Provider-specific options belong under `model.config`:
 

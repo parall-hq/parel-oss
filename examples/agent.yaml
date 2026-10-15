@@ -3,8 +3,8 @@ agent:
   name: hello-agent
 
 model:
-  provider: anthropic
-  model: claude-sonnet-5
+  provider: parel
+  model: anthropic/claude-sonnet-5.5
 
 plugins:
   - plugin: system-static

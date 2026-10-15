@@ -33,26 +33,22 @@ The layout is organized for a future multi-language ecosystem. JavaScript and Ty
 
 ## Quickstart
 
-Install the CLI from npm, log in, add your model key, and deploy.
+Install the CLI from npm, log in, and deploy.
 
 Prerequisites:
 
 - Node.js 22 or newer.
 - A PAREL API key. Sign in to the [console](https://parel.sh/console) and
   create one under [Settings → API keys](https://parel.sh/console/settings/api-keys).
-  The default Write scope can deploy and chat; setting a model key from the CLI
-  needs an Admin-scope key.
-- Your own model provider key. The example below uses Anthropic
-  (`ANTHROPIC_API_KEY`) and an E2B sandbox (`E2B_API_KEY`).
+  The default Write scope can deploy and chat.
+- An E2B key for the agent's sandbox (`E2B_API_KEY`). The example below runs on
+  a PAREL-hosted model (`provider: parel`), billed to your workspace at the model
+  provider's price, so it needs no model key. To use your own Anthropic, OpenAI or
+  OpenRouter key instead, see the [model providers](protocol/agent-config.md#model-providers).
 
 ```bash
 npm install -g @parel/cli
 parel login                     # paste your PAREL API key (pk_...)
-
-# Add your model key. This needs an Admin-scope API key; or add the key in the
-# console under Settings → Model providers instead.
-export ANTHROPIC_API_KEY=sk-ant-...
-parel provider-keys set anthropic --from-env ANTHROPIC_API_KEY
 
 export E2B_API_KEY=e2b_...      # referenced as ${E2B_API_KEY} in agent.yaml; deploy uploads it
 parel capabilities doctor ./agent.yaml
@@ -68,8 +64,8 @@ version: "1"
 agent:
   name: hello-agent
 model:
-  provider: anthropic
-  model: claude-sonnet-5
+  provider: parel
+  model: anthropic/claude-sonnet-5.5
 plugins:
   - plugin: system-static
     config:
