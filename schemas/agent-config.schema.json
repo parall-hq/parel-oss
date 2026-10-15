@@ -36,7 +36,7 @@
         "provider": {
           "type": "string",
           "minLength": 1,
-          "description": "Model provider alias: parel (PAREL-hosted models by OpenRouter model id, no key needed), anthropic, openai, openai-responses, or openai-compatible / anthropic-compatible (set config.baseUrl + a BYOK key for any compatible endpoint)."
+          "description": "Model provider alias: anthropic, openai, openai-responses (on the hosted service, these run PAREL-hosted when the workspace gives no key), parel (any PAREL-hosted model by OpenRouter model id), or openai-compatible / anthropic-compatible (set config.baseUrl + a BYOK key for any compatible endpoint)."
         },
         "model": {
           "type": "string",
