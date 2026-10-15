@@ -3,8 +3,8 @@ agent:
   name: coding-agent
 
 model:
-  provider: parel
-  model: anthropic/claude-sonnet-5.5
+  provider: anthropic
+  model: claude-sonnet-5-5
 
 runtime:
   maxSteps: 80

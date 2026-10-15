@@ -892,8 +892,8 @@ See [API Key Scopes](#api-key-scopes).
 ## Model Provider Keys
 
 These are the workspace's own keys, for agents that call a model provider on
-the workspace's account; that provider bills the workspace directly. Agents on
-PAREL-hosted models (`provider: parel`) need none. Keys are stored
+the workspace's account; that provider bills the workspace directly. Without
+one, Anthropic and OpenAI models run on PAREL-hosted models. Keys are stored
 per credential provider id (`anthropic`, `openai`, `openrouter`, `deepseek`, …:
 lowercase letters, digits, and dashes) and used by every agent in the
 workspace, unless its config sets `model.config.apiKey`. The console page is
@@ -901,7 +901,7 @@ Settings → Model providers.
 
 | Method | Path | Body | Description |
 | --- | --- | --- | --- |
-| `GET` | `/providers` | none | List suggested model providers and whether the workspace has a key for each (`source`: `byok` or `none`); `parel` is listed with `source: "platform"` when hosted models are available. |
+| `GET` | `/providers` | none | List suggested model providers and what their calls run on (`source`): `byok` (the workspace's key), `platform` (PAREL-hosted: an `anthropic` / `openai` slot with no key, and `parel` itself) or `none`. |
 | `GET` | `/provider-keys` | none | List stored provider keys (`id`, `provider`, `key_prefix`, `created_at`). |
 | `POST` | `/provider-keys` | `{ "provider": "anthropic", "key": "..." }` | Add or replace the key for one provider. Admin scope. |
 | `DELETE` | `/provider-keys/{keyId}` | none | Delete a provider key. Admin scope. |
@@ -940,11 +940,12 @@ need an Admin key.
 | `POST` | `/billing/portal` | none | Open the billing portal (change plan, cancel, card, invoices). Returns `{ "url" }`. |
 | `GET` | `/billing/balance` | none | **Legacy.** Always returns zero: the hosted service keeps no prepaid balance. |
 
-Billing endpoints are part of the hosted service contract. Model calls run
-either on PAREL-hosted models (`provider: parel`), billed to the workspace at
-the price the model provider reports for each call with no markup (`modelUsd`),
-or on provider keys the workspace supplies (a workspace provider key or a
-`model.config.apiKey` secret reference), which the provider bills directly.
+Billing endpoints are part of the hosted service contract. Model calls run on
+provider keys the workspace supplies (a workspace provider key or a
+`model.config.apiKey` secret reference), which the provider bills directly, or —
+for a model given no key at all, and for `provider: parel` — on PAREL-hosted
+models, billed to the workspace at the price the model provider reports for each
+call with no markup (`modelUsd`).
 
 The hosted service meters the runtime itself: one **step** is one model call the
 runtime made and received usage for (sub-agent and plugin calls included), and

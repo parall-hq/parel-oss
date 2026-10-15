@@ -41,10 +41,10 @@ Prerequisites:
 - A PAREL API key. Sign in to the [console](https://parel.sh/console) and
   create one under [Settings → API keys](https://parel.sh/console/settings/api-keys).
   The default Write scope can deploy and chat.
-- An E2B key for the agent's sandbox (`E2B_API_KEY`). The example below runs on
-  a PAREL-hosted model (`provider: parel`), billed to your workspace at the model
-  provider's price, so it needs no model key. To use your own Anthropic, OpenAI or
-  OpenRouter key instead, see the [model providers](protocol/agent-config.md#model-providers).
+- An E2B key for the agent's sandbox (`E2B_API_KEY`). No model key is needed:
+  without one, the hosted service runs the model for you and bills your workspace
+  at the model provider's price. Add your own Anthropic, OpenAI or OpenRouter key
+  any time to use it instead (see [model providers](protocol/agent-config.md#model-providers)).
 
 ```bash
 npm install -g @parel/cli
@@ -64,8 +64,8 @@ version: "1"
 agent:
   name: hello-agent
 model:
-  provider: parel
-  model: anthropic/claude-sonnet-5.5
+  provider: anthropic
+  model: claude-sonnet-5-5
 plugins:
   - plugin: system-static
     config:
