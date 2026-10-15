@@ -64,7 +64,7 @@ without an error, so validate against the schema to catch misspellings.
 
 | `provider` | API family | Provider key it uses |
 | --- | --- | --- |
-| `parel` | Any other PAREL-hosted model, by OpenRouter model id (e.g. `deepseek/deepseek-v4.1-flash`) | none: PAREL's, billed to the workspace |
+| `parel` | Any other PAREL-hosted model, by vendor/model name (e.g. `deepseek/deepseek-v4.1-flash`) | none: PAREL's, billed to the workspace |
 | `anthropic` | Anthropic Messages API | `anthropic` |
 | `openai` | OpenAI Chat Completions API | `openai` |
 | `openai-responses` | OpenAI Responses API | `openai` |
