@@ -3171,12 +3171,16 @@ interface BillingPlan {
 	month: string;
 	steps: number;
 	connectionDays: number;
+	/** PAREL-hosted model spend (absent from servers before hosted models). */
+	modelUsd?: number;
 	usageUsd: number;
 	includedSteps: number | null;
 	includedUsd: number | null;
+	includedHostedUsd?: number | null;
 	overageUsd: number;
 	spendCapUsd: number | null;
 	limitReached: boolean;
+	hostedLimitReached?: boolean;
 }
 
 const billingPlan = defineCommand({
@@ -3198,14 +3202,24 @@ const billingPlan = defineCommand({
 			console.log(`  month:        ${data.month}`);
 			console.log(`  steps:        ${data.steps}`);
 			console.log(`  connections:  ${data.connectionDays} connection-days`);
+			if (data.modelUsd !== undefined)
+				console.log(`  hosted:       ${usd(data.modelUsd)} (PAREL-hosted models, at cost)`);
 			console.log(`  usage:        ${usd(data.usageUsd)}`);
 			if (data.includedSteps !== null) console.log(`  included:     ${data.includedSteps} steps`);
+			if (data.includedHostedUsd != null)
+				console.log(`  included:     ${usd(data.includedHostedUsd)} of hosted models`);
 			if (data.includedUsd !== null) console.log(`  included:     ${usd(data.includedUsd)}`);
 			console.log(`  overage:      ${usd(data.overageUsd)}`);
 			if (data.spendCapUsd !== null)
 				console.log(`  spend cap:    ${usd(data.spendCapUsd)} over plan`);
 			if (data.limitReached)
 				console.log(c.yellow("  limit reached — new turns are paused until next month"));
+			else if (data.hostedLimitReached)
+				console.log(
+					c.yellow(
+						"  hosted allowance used up — turns on hosted models are paused until next month",
+					),
+				);
 		} catch (err) {
 			handleError(err);
 		}

@@ -891,8 +891,9 @@ See [API Key Scopes](#api-key-scopes).
 
 ## Model Provider Keys
 
-PAREL does not provide model access. Agents call models with the workspace's
-own keys, and the model provider bills the workspace directly. Keys are stored
+These are the workspace's own keys, for agents that call a model provider on
+the workspace's account; that provider bills the workspace directly. Without
+one, Anthropic and OpenAI models run on PAREL-hosted models. Keys are stored
 per credential provider id (`anthropic`, `openai`, `openrouter`, `deepseek`, …:
 lowercase letters, digits, and dashes) and used by every agent in the
 workspace, unless its config sets `model.config.apiKey`. The console page is
@@ -900,7 +901,7 @@ Settings → Model providers.
 
 | Method | Path | Body | Description |
 | --- | --- | --- | --- |
-| `GET` | `/providers` | none | List suggested model providers and whether the workspace has a key for each. |
+| `GET` | `/providers` | none | List suggested model providers and what their calls run on (`source`): `byok` (the workspace's key), `platform` (PAREL-hosted: an `anthropic` / `openai` slot with no key, and `parel` itself) or `none`. |
 | `GET` | `/provider-keys` | none | List stored provider keys (`id`, `provider`, `key_prefix`, `created_at`). |
 | `POST` | `/provider-keys` | `{ "provider": "anthropic", "key": "..." }` | Add or replace the key for one provider. Admin scope. |
 | `DELETE` | `/provider-keys/{keyId}` | none | Delete a provider key. Admin scope. |
@@ -933,22 +934,27 @@ need an Admin key.
 | --- | --- | --- | --- |
 | `GET` | `/billing/summary` | none | Token and estimated model cost totals, by agent, by model, and by day. |
 | `GET` | `/billing/usage` | query | Model call records, newest first. Query: `limit` (≤ 200), `offset`. |
-| `GET` | `/billing/plan` | none | Plan and this month's metered usage: `plan`, `status`, `month`, `steps`, `connectionDays`, `usageUsd`, `includedSteps`, `includedUsd`, `overageUsd`, `spendCapUsd`, `limitReached`. |
+| `GET` | `/billing/plan` | none | Plan and this month's metered usage: `plan`, `status`, `month`, `steps`, `connectionDays`, `modelUsd`, `usageUsd`, `includedSteps`, `includedUsd`, `includedHostedUsd`, `overageUsd`, `spendCapUsd`, `limitReached`, `hostedLimitReached`. |
 | `PUT` | `/billing/spend-cap` | `{ "usd": 20 }` | Set the monthly overage cap of a paid plan (0 to 10000). Hobby and Pro only. |
 | `POST` | `/billing/checkout` | `{ "plan": "hobby" \| "pro" }` | Start a subscription checkout. Returns `{ "url" }`. |
 | `POST` | `/billing/portal` | none | Open the billing portal (change plan, cancel, card, invoices). Returns `{ "url" }`. |
 | `GET` | `/billing/balance` | none | **Legacy.** Always returns zero: the hosted service keeps no prepaid balance. |
 
-Billing endpoints are part of the hosted service contract. The hosted service
-does not provide model access: model calls run on provider keys the workspace
-supplies (a workspace provider key or a `model.config.apiKey` secret reference),
-and the provider bills the workspace directly.
+Billing endpoints are part of the hosted service contract. Model calls run on
+provider keys the workspace supplies (a workspace provider key or a
+`model.config.apiKey` secret reference), which the provider bills directly, or —
+for a model given no key at all, and for `provider: parel` — on PAREL-hosted
+models, billed to the workspace at the price the model provider reports for each
+call with no markup (`modelUsd`).
 
 The hosted service meters the runtime itself: one **step** is one model call the
 runtime made and received usage for (sub-agent and plugin calls included), and
 an **always-on connection** is an enabled `managed_ws` channel connection,
-counted per day. Usage is summed per UTC calendar month against the plan's
-monthly allowance. When the Free plan's allowance or a paid plan's spend cap is
-used up, new turns are refused with error code `billing_insufficient`; enabling
-a connection beyond the plan's limit is refused with `plan_limit`. Prices and
-plans: <https://parel.sh/pricing>.
+counted per day. Usage, hosted model spend included, is summed per UTC calendar
+month against the plan's monthly allowance; the Free plan's hosted allowance
+(`includedHostedUsd`) is separate from its steps. When the Free plan's steps or
+a paid plan's spend cap are used up, new turns are refused with error code
+`billing_insufficient`; when only the Free hosted allowance is used up
+(`hostedLimitReached`), so are new turns on hosted models. Enabling a connection
+beyond the plan's limit is refused with `plan_limit`. Prices and plans:
+<https://parel.sh/pricing>.
