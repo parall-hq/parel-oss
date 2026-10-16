@@ -34,7 +34,7 @@ runtime:
   toolResultMaxBytes: 65536
   reasoning:
     enabled: true
-    budgetTokens: 4096
+    effort: medium
 ```
 
 ## Top-Level Fields
@@ -236,7 +236,7 @@ instances × sessions):
 
   Typed `runtime` knobs (`maxTurns`, `maxSteps`, `instanceBudgetUsd`,
   `maxParallelToolCalls`, `toolResultMaxBytes`, `reasoning.enabled`,
-  `reasoning.budgetTokens`) may hold a **whole-value** reference —
+  `reasoning.budgetTokens`, `reasoning.effort`) may hold a **whole-value** reference —
   `enabled: "${var:REASONING}"` deploys fine, and the runtime substitutes
   type-aware per instance at turn boundaries (`"true"` → boolean, `"16384"` →
   number) and re-validates the field's real type there; a whole-value default
@@ -312,7 +312,8 @@ channels:
 | `instanceBudgetUsd` | number > 0 | no limit | Spend ceiling per instance (see above). |
 | `deploymentTracking` | `live` \| `pinned` | `live` | How sessions follow new versions (below). |
 | `reasoning.enabled` | boolean | `false` | Request provider reasoning when supported. |
-| `reasoning.budgetTokens` | integer ≥ 1 | — | Reasoning budget in tokens. |
+| `reasoning.budgetTokens` | integer ≥ 1 | — | Reasoning budget in tokens, used when `effort` is unset. See [Model Calls](model-calls.md#reasoning). |
+| `reasoning.effort` | `low` \| `medium` \| `high` | `medium`, unless `budgetTokens` is set | How hard the model thinks. Wins over `budgetTokens`. See [Model Calls](model-calls.md#reasoning). |
 
 `runtime.reasoning` requests provider reasoning when supported. Providers differ
 in whether they expose text, summaries, signatures, or opaque replay artifacts.

@@ -1,3 +1,4 @@
+import type { ReasoningConfig } from "./session.js";
 export interface AgentConfig {
 	version: string;
 	agent?: AgentIdentity;
@@ -56,10 +57,7 @@ export interface RuntimeConfig {
 	durability?: "event-sourced" | "ephemeral";
 	/** @deprecated Ignored by the runtime; remove it from configs. */
 	checkpointInterval?: number;
-	reasoning?: {
-		enabled: boolean;
-		budgetTokens?: number;
-	};
+	reasoning?: ReasoningConfig;
 	/**
 	 * How sessions relate to the agent's deployments after creation: "live"
 	 * (default) adopts the active deployment's config and frozen plugin lock at

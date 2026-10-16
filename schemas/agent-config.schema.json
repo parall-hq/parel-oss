@@ -181,6 +181,22 @@
                   "$ref": "#/$defs/instanceVarRef"
                 }
               ]
+            },
+            "effort": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high"
+                  ]
+                },
+                {
+                  "$ref": "#/$defs/instanceVarRef"
+                }
+              ],
+              "description": "How hard the model thinks: low, medium or high. Wins over budgetTokens: a level asks for level-based reasoning (Claude adaptive thinking, OpenAI reasoning effort), a budget alone for budget-based reasoning; neither means medium."
             }
           },
           "additionalProperties": false

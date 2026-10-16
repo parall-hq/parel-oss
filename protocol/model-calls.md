@@ -57,8 +57,8 @@ present. Deploy the receiver's compatibility change before upgrading the sender.
 
 | Value | Output limit | Reasoning |
 | --- | --- | --- |
-| `openai` | `max_completion_tokens` | `reasoning_effort` |
-| `openrouter` | `max_tokens` | `reasoning.max_tokens` |
+| `openai` | `max_completion_tokens` | `reasoning_effort` (a level only) |
+| `openrouter` | `max_tokens` | `reasoning.effort` (a level) or `reasoning.max_tokens` (a budget) |
 | `compatible` | `max_tokens` | Reject enabled reasoning without an explicit supported format. |
 | `parall` | Deprecated alias of `openrouter`; retained for existing configurations. | Same as `openrouter`. |
 
@@ -68,8 +68,21 @@ performed. A native-compatible endpoint, even with a GPT model name, should set
 `parameterDialect: openai`. Responses and Anthropic use their own API fields;
 Chat Completions dialect selection does not override them.
 
-`model.config.thinkingMode` may select `adaptive`, `enabled`, or `disabled` for
-Anthropic. Omitted mode uses the adapter's model capability selection. Manual
-thinking must fit below the output limit; incompatible explicit limits fail
-before sending a request. Provider configuration changes follow normal immutable
-agent versioning; existing pinned sessions are not rewritten.
+## Reasoning
+
+With `runtime.reasoning.enabled`, what PAREL asks the provider for depends only
+on what the agent configured, never on the model name:
+
+| Configured | Anthropic Messages | Chat Completions / Responses |
+| --- | --- | --- |
+| `effort` | Adaptive thinking with `output_config.effort` | The dialect's level field |
+| `budgetTokens` only | Manual thinking with `thinking.budget_tokens` | The dialect's budget field; a level-only format (`openai`, Responses) converts it: ≤ 4096 low, ≤ 8192 medium, above that high |
+| Neither | As `effort: medium` | As `effort: medium` |
+
+`model.config.thinkingMode` (Anthropic) overrides that choice: `adaptive` or
+`enabled` (manual) runs as written, taking a missing level from the budget as
+above and a missing budget from the level (low 4096, medium 8192, high 16384);
+`disabled` turns thinking off. Manual thinking must fit below the output limit;
+incompatible explicit limits fail before sending a request. Provider
+configuration changes follow normal immutable agent versioning; existing pinned
+sessions are not rewritten.

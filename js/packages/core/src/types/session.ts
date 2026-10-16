@@ -414,9 +414,22 @@ export interface NormalizeRegistrationOptions {
 	priority?: number;
 }
 
+/** Reasoning levels, least to most thinking; portable across providers. */
+export const REASONING_EFFORTS = ["low", "medium", "high"] as const;
+/** How hard a reasoning model thinks. */
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+
 export interface ReasoningConfig {
 	enabled: boolean;
+	/** Thinking budget in tokens, for providers that take a fixed budget. */
 	budgetTokens?: number;
+	/**
+	 * Thinking effort. Wins over budgetTokens: a level asks for level-based
+	 * reasoning (Claude adaptive thinking, OpenAI reasoning effort), a budget
+	 * alone for budget-based reasoning; neither means medium. See
+	 * protocol/model-calls.md#reasoning.
+	 */
+	effort?: ReasoningEffort;
 }
 
 export interface TokenUsage {
