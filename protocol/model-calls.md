@@ -58,7 +58,7 @@ present. Deploy the receiver's compatibility change before upgrading the sender.
 | Value | Output limit | Reasoning |
 | --- | --- | --- |
 | `openai` | `max_completion_tokens` | `reasoning_effort` |
-| `openrouter` | `max_tokens` | `reasoning.max_tokens` |
+| `openrouter` | `max_tokens` | `reasoning.effort` when `runtime.reasoning.effort` is set, else `reasoning.max_tokens` |
 | `compatible` | `max_tokens` | Reject enabled reasoning without an explicit supported format. |
 | `parall` | Deprecated alias of `openrouter`; retained for existing configurations. | Same as `openrouter`. |
 
@@ -67,6 +67,12 @@ preserves its historical `openrouter` format. No URL or model-name inference is
 performed. A native-compatible endpoint, even with a GPT model name, should set
 `parameterDialect: openai`. Responses and Anthropic use their own API fields;
 Chat Completions dialect selection does not override them.
+
+The reasoning effort level is `runtime.reasoning.effort` when set; otherwise it
+is derived from `budgetTokens` (≤ 4096 low, ≤ 8192 medium, above that high;
+medium without a budget). Anthropic adaptive thinking sends it as
+`output_config.effort`; OpenAI sends it as `reasoning_effort` (Chat Completions)
+or `reasoning.effort` (Responses).
 
 `model.config.thinkingMode` may select `adaptive`, `enabled`, or `disabled` for
 Anthropic. Omitted mode uses the adapter's model capability selection. Manual
