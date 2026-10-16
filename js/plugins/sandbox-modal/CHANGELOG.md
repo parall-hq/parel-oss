@@ -1,5 +1,11 @@
 # @parel/sandbox-modal
 
+## 0.3.12
+
+### Patch Changes
+
+- @parel/plugin-sdk@0.17.3
+
 ## 0.3.11
 
 ### Patch Changes
