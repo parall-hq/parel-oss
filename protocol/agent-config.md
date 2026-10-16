@@ -312,8 +312,8 @@ channels:
 | `instanceBudgetUsd` | number > 0 | no limit | Spend ceiling per instance (see above). |
 | `deploymentTracking` | `live` \| `pinned` | `live` | How sessions follow new versions (below). |
 | `reasoning.enabled` | boolean | `false` | Request provider reasoning when supported. |
-| `reasoning.budgetTokens` | integer ≥ 1 | — | Reasoning budget in tokens, for models that take a fixed budget. |
-| `reasoning.effort` | `low` \| `medium` \| `high` | from `budgetTokens`, else `medium` | How hard the model thinks, for models that take an effort level (Claude adaptive thinking, OpenAI reasoning effort). Wins over `budgetTokens` there; a budget-only model derives its budget from it (low 4096, medium 8192, high 16384) when `budgetTokens` is unset. |
+| `reasoning.budgetTokens` | integer ≥ 1 | — | Reasoning budget in tokens, used when `effort` is unset. See [Model Calls](model-calls.md#reasoning). |
+| `reasoning.effort` | `low` \| `medium` \| `high` | `medium`, unless `budgetTokens` is set | How hard the model thinks. Wins over `budgetTokens`. See [Model Calls](model-calls.md#reasoning). |
 
 `runtime.reasoning` requests provider reasoning when supported. Providers differ
 in whether they expose text, summaries, signatures, or opaque replay artifacts.
