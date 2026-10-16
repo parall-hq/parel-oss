@@ -1,5 +1,12 @@
 # @parel/plugin-sdk
 
+## 0.17.3
+
+### Patch Changes
+
+- Updated dependencies [6015697]
+  - @parel/core@0.20.0
+
 ## 0.17.2
 
 ### Patch Changes

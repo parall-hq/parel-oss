@@ -1,5 +1,12 @@
 # @parel/cli
 
+## 0.7.1
+
+### Patch Changes
+
+- Updated dependencies [6015697]
+  - @parel/core@0.20.0
+
 ## 0.7.0
 
 ### Minor Changes

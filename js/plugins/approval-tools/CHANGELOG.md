@@ -1,5 +1,11 @@
 # @parel/approval-tools
 
+## 0.1.24
+
+### Patch Changes
+
+- @parel/plugin-sdk@0.17.3
+
 ## 0.1.23
 
 ### Patch Changes
