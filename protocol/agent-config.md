@@ -147,8 +147,8 @@ releases. Omitted means the latest release at deploy time.
 An entry without config must be the bare name: a name followed by a colon and
 nothing else (`- memory-rolling-summary:`) fails validation.
 
-If the list has a sandbox plugin but no security plugin, `security-basic` is
-added automatically.
+Only the listed plugins run: the runtime never adds one. A sandbox is already
+isolated; list `security-basic` if you also want its shell commands filtered.
 
 Model provider packages must not be listed under `plugins`.
 

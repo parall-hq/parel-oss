@@ -52,6 +52,33 @@ Plugins receive a `PluginContext` with:
 | `provide` / `require` | Capability registry. |
 | `interrupt` | Request session interruption. |
 
+## Model Access
+
+`ctx.model.chat()` calls the session's configured model through the host.
+
+- `ctx.model.capabilities()` returns the capabilities of the model the
+  session's calls run on: `modelId`, `provider`, `maxContextTokens`, and the
+  rest of `ModelCapabilities`. `maxContextTokens: 0` means the window is
+  unknown — for example an `openai-compatible` endpoint whose agent config does
+  not set `model.config.maxContextTokens` — so pick your own fallback. Read it
+  when you need it rather than once in `setup`: a session can switch models at
+  a turn boundary when it adopts a new deployment.
+- A failed `ctx.model.chat()` throws an `Error` whose `code` property is the
+  host's stable error code when it has one (`model_output_limit`,
+  `context_window_exceeded`, `provider_auth`, `session_terminated`, ... — the
+  [HTTP API error codes](http-api.md#error-codes)). Branch on `err.code`, not on
+  the message text; tolerate its absence and treat an unknown code as a generic
+  failure.
+
+## Finish Your Work Inside the Call
+
+Every hook, tool, normalizer, and command invocation is one call into your
+plugin. Await every request it starts — a `fetch`, a `ctx.model.chat()`
+stream, an `instanceStore` call — before the handler returns. A request still running
+when the call returns is cancelled, and nothing retries it. There is no
+background continuation: work that must outlive the call belongs in a later
+invocation or an external service.
+
 ## Slash Commands
 
 A user message that starts with `/name` (optionally followed by whitespace and
