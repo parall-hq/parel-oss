@@ -50,7 +50,6 @@ const STATE_KEY = "rolling_summary";
 const LAST_CALL_KEY = "rolling_summary_last_call";
 
 const DEFAULT_KEEP_RECENT_TOKENS = 20_000;
-const DEFAULT_SUMMARY_MAX_TOKENS = 16_000;
 // Summarizer input limits, in characters: the head of a bulky payload carries
 // its gist. Prose carries decisions, so it keeps more than tool output.
 const TOOL_RESULT_MAX_CHARS = 2_000;
@@ -247,7 +246,6 @@ export default definePlugin({
 			1,
 			Math.min(positive("keep_recent_tokens") ?? DEFAULT_KEEP_RECENT_TOKENS, threshold / 2),
 		);
-		const summaryMaxTokens = positive("summary_max_tokens") ?? DEFAULT_SUMMARY_MAX_TOKENS;
 		if (ctx.config.keep_recent_messages !== undefined) {
 			ctx.log.warn(
 				"keep_recent_messages is no longer read: the recent window is measured in tokens (keep_recent_tokens)",
@@ -350,6 +348,8 @@ export default definePlugin({
 				? `Pay particular attention to preserving anything related to: ${opts.focus}\n`
 				: "";
 
+			// No maxTokens: the host's default output limit (the model's own) applies,
+			// so a thinking model does not spend the whole budget before writing.
 			let next = "";
 			for await (const chunk of ctx.model.chat({
 				messages: [
@@ -369,7 +369,6 @@ export default definePlugin({
 						],
 					},
 				],
-				maxTokens: summaryMaxTokens,
 			})) {
 				if (chunk.type === "text_delta" && chunk.text) next += chunk.text;
 			}

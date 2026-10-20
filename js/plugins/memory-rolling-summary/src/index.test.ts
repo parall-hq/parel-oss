@@ -429,18 +429,14 @@ describe("trigger: the real input size", () => {
 });
 
 describe("summary call", () => {
-	it("asks for up to 16000 output tokens, or summary_max_tokens", async () => {
-		for (const [config, expected] of [
-			[SMALL, 16_000],
-			[{ ...SMALL, summary_max_tokens: 8_000 }, 8_000],
-		] as const) {
-			const calls: ModelCallParams[] = [];
-			const h = makeHarness({ config, model: fakeModel("ROLLED UP", [], calls) });
-			await memoryPlugin.setup(h.ctx);
-			await h.fire(contextBuild, { system: "SYS", messages: bulkMessages(8, "x".repeat(60)) });
-			await h.fire(turnEnd);
-			expect(calls.map((call) => call.maxTokens)).toEqual([expected]);
-		}
+	it("leaves the output limit to the host's default (the model's own)", async () => {
+		const calls: ModelCallParams[] = [];
+		const h = makeHarness({ config: SMALL, model: fakeModel("ROLLED UP", [], calls) });
+		await memoryPlugin.setup(h.ctx);
+		await h.fire(contextBuild, { system: "SYS", messages: bulkMessages(8, "x".repeat(60)) });
+		await h.fire(turnEnd);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].maxTokens).toBeUndefined();
 	});
 
 	it("truncates long tool results, tool arguments and text in the summarizer's input", async () => {

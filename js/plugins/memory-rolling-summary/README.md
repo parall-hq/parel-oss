@@ -24,7 +24,6 @@ Options (all optional):
 | `max_context_tokens` | the model adapter's advertised window, else 100 000 | budget the summary keeps the window under |
 | `compact_at` | `0.8` | fraction of the budget at which older messages fold into the summary |
 | `keep_recent_tokens` | `20000` | recent conversation always kept verbatim after the summary, in tokens (at most half of the fold threshold) |
-| `summary_max_tokens` | `16000` | output limit of the summary call; lower it for models with a smaller output cap |
 
 `keep_recent_messages` is no longer read; the recent window is measured in
 tokens.
