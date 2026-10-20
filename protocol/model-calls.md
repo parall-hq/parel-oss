@@ -68,6 +68,30 @@ performed. A native-compatible endpoint, even with a GPT model name, should set
 `parameterDialect: openai`. Responses and Anthropic use their own API fields;
 Chat Completions dialect selection does not override them.
 
+## Output limit
+
+The output limit is the most tokens one model response may produce, thinking
+included. PAREL sends the first of these that applies:
+
+| Source | Anthropic Messages | Chat Completions / Responses |
+| --- | --- | --- |
+| A per-call limit (a plugin's own model call) | `max_tokens` | The dialect's output-limit field; `max_output_tokens` on Responses |
+| `model.config.maxTokens` | `max_tokens` | Same |
+| Neither | The model's own maximum, from the endpoint's model list; 8192 when that can't be read | No limit: the provider's default applies (on OpenAI, the model's own maximum) |
+
+The model's own maximum is read the first time the runtime uses a model on an
+endpoint and then remembered: `max_tokens` from Anthropic's
+`GET /v1/models/{model}`, or the hosted supplier's model list for PAREL-hosted
+Claude. The lookup uses the call's own endpoint, key and headers, and it never
+fails the call; when an endpoint has no such list, as with some
+`anthropic-compatible` gateways, the call sends 8192 and the runtime logs a
+warning. Set `model.config.maxTokens` there.
+
+Claude models before 4.5 reject a request whose prompt plus `max_tokens` is
+larger than the context window, so very long conversations on them may need a
+smaller `model.config.maxTokens`. Manual thinking budgets must stay below the
+limit sent (see [Reasoning](#reasoning)).
+
 ## Reasoning
 
 With `runtime.reasoning.enabled`, what PAREL asks the provider for depends only
@@ -82,10 +106,11 @@ on what the agent configured, never on the model name:
 `model.config.thinkingMode` (Anthropic) overrides that choice: `adaptive` or
 `enabled` (manual) runs as written, taking a missing level from the budget as
 above and a missing budget from the level (low 4096, medium 8192, high 16384);
-`disabled` turns thinking off. Manual thinking must fit below the output limit;
-incompatible explicit limits fail before sending a request. Provider
-configuration changes follow normal immutable agent versioning; existing pinned
-sessions are not rewritten.
+`disabled` turns thinking off. Manual thinking must fit below the
+[output limit](#output-limit); incompatible explicit limits fail before sending
+a request. Provider configuration changes follow normal immutable agent
+versioning; existing pinned sessions are not rewritten.
+
 
 ## Prompt cache
 
