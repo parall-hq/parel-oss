@@ -1,0 +1,9 @@
+{
+  "name": "@parel/prompt-cache",
+  "execution": {
+    "snapshot": {
+      "store": "reset",
+      "sideEffects": "reference"
+    }
+  }
+}

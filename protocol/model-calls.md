@@ -86,3 +86,21 @@ above and a missing budget from the level (low 4096, medium 8192, high 16384);
 incompatible explicit limits fail before sending a request. Provider
 configuration changes follow normal immutable agent versioning; existing pinned
 sessions are not rewritten.
+
+## Prompt cache
+
+Plugins mark prompt units worth caching with a provider-neutral `cacheHint` on
+messages, content parts, or tool definitions, usually at `model:before`. Before
+sending, the runtime turns hints into cache breakpoints for adapters that place
+them explicitly (Anthropic Messages: at most 4, 5 minute lifetime). The system
+prompt and the tool definitions are candidates by default (priority 50 and 40);
+a message or part is a candidate only when it has an `id` and a hint without
+`eligible: false` (default priority 60). When a provider caps breakpoints, the
+highest priorities win. Adapters that cache automatically (OpenAI-family) ignore
+hints; their cache routing goes through `providerOptions.openai.prompt_cache_key`.
+
+`ModelCallParams.promptCache` controls planning for one call: `enabled: false`
+or `mode: "off"` plans nothing, and a non-empty `breakpoints` list is sent as
+written instead of being planned. Breakpoints outside the adapter's advertised
+limits (count, TTL, scope) fail the call before sending. The first-party
+`@parel/prompt-cache` plugin hints the end of the conversation history.

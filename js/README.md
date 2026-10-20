@@ -16,7 +16,8 @@ JavaScript and TypeScript packages for PAREL.
 
 Runtime plugins (listed in `agent.yaml` under `plugins`):
 
-- Prompt and memory: `@parel/system-static`, `@parel/memory-rolling-summary`
+- Prompt and memory: `@parel/system-static`, `@parel/memory-rolling-summary`,
+  `@parel/prompt-cache`
 - Guards and control: `@parel/security-basic`, `@parel/budget-cap`,
   `@parel/steering-immediate`
 - Delegation: `@parel/subagent`
