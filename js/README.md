@@ -23,7 +23,7 @@ Runtime plugins (listed in `agent.yaml` under `plugins`):
 - Delegation: `@parel/subagent`
 - Sandboxes: `@parel/sandbox-e2b`, `@parel/sandbox-daytona`,
   `@parel/sandbox-vercel`, `@parel/sandbox-modal`, `@parel/sandbox-cloudflare`
-- Coding agents: `@parel/coding-agent`, `@parel/workspace`,
+- Coding agents: `@parel/coding-agent`, `@parel/agents-md`, `@parel/workspace`,
   `@parel/filesystem-tools`, `@parel/search-tools`, `@parel/edit-tools`,
   `@parel/git-tools`, `@parel/shell-tools`, `@parel/process-tools`,
   `@parel/port-tools`, `@parel/approval-tools`

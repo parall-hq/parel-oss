@@ -1,0 +1,21 @@
+{
+  "$schema": "../../../schemas/plugin-manifest.schema.json",
+  "name": "@parel/agents-md",
+  "description": "Loads AGENTS.md files from the sandbox working directory, and from the subdirectories the model works in, into the system prompt.",
+  "provides": {
+    "hooks": true
+  },
+  "consumes": {
+    "transcript": "lazy"
+  },
+  "config": {
+    "root": "Optional directory to read AGENTS.md from. Defaults to the workspace root when @parel/workspace has one, else the sandbox's working directory.",
+    "maxChars": "Optional limit on the characters injected across all loaded AGENTS.md files (defaults to 32000). Text past it is cut, and the model is told what was cut."
+  },
+  "execution": {
+    "snapshot": {
+      "store": "copy",
+      "sideEffects": "reference"
+    }
+  }
+}
