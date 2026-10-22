@@ -10,10 +10,18 @@ type CapturedHook = {
 	) => Promise<{ action: string; reason?: string } | undefined>;
 };
 
-function createPluginContext(config: Record<string, unknown>) {
+function createPluginContext(config: Record<string, unknown>, store = new Map<string, unknown>()) {
 	let captured: CapturedHook | undefined;
+	const warnings: string[] = [];
 	const ctx = {
 		config,
+		store: {
+			get: async (key: string) => store.get(key) ?? null,
+			set: async (key: string, value: unknown) => {
+				store.set(key, value);
+			},
+		},
+		log: { warn: (message: string) => warnings.push(message) },
 		hook: (event: LifecycleEventType, handler: CapturedHook["handler"]) => {
 			captured = { event, handler };
 		},
@@ -21,6 +29,7 @@ function createPluginContext(config: Record<string, unknown>) {
 
 	return {
 		ctx,
+		warnings,
 		getHook() {
 			if (!captured) throw new Error("No hook registered");
 			return captured;
@@ -87,5 +96,36 @@ describe("budget-cap", () => {
 			action: "stop",
 			reason: "Turn limit reached: 2 > 1",
 		});
+	});
+
+	test("warns once per session when tokens cost nothing", async () => {
+		const store = new Map<string, unknown>();
+		const { ctx, warnings, getHook } = createPluginContext({ max_usd: 40 }, store);
+
+		await plugin.setup(ctx);
+		const hook = getHook();
+		await expect(hook.handler(createHookContext({ totalTokens: 1200 }))).resolves.toBeUndefined();
+		await hook.handler(createHookContext({ totalTokens: 2400 }));
+
+		expect(warnings).toEqual([
+			"Session used 1200 tokens at $0: the model has no price, so max_usd ($40) cannot take effect.",
+		]);
+
+		// A fresh plugin runtime for the same session reads the flag from the session store.
+		const again = createPluginContext({ max_usd: 40 }, store);
+		await plugin.setup(again.ctx);
+		await again.getHook().handler(createHookContext({ totalTokens: 3600 }));
+		expect(again.warnings).toEqual([]);
+	});
+
+	test("does not warn before any usage or when the model is priced", async () => {
+		const { ctx, warnings, getHook } = createPluginContext({ max_usd: 40 });
+
+		await plugin.setup(ctx);
+		const hook = getHook();
+		await hook.handler(createHookContext());
+		await hook.handler(createHookContext({ totalTokens: 1200, totalCostUsd: 0.01 }));
+
+		expect(warnings).toEqual([]);
 	});
 });
