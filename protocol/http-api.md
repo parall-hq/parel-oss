@@ -512,7 +512,7 @@ no longer kept.
 | Method | Path | Description |
 | --- | --- | --- |
 | `GET` | `/sessions/{sessionId}/events` | A session's events in order. Query: `since_seq`, `limit` (≤ 5000, default 500). |
-| `GET` | `/sessions/{sessionId}/steps` | What each step did: `model_reasoning`, `tool_call`, `tool_result`, and `turn_failed` records. Query: `since_seq`, `limit` (≤ 1000, default 200); same paging as events. |
+| `GET` | `/sessions/{sessionId}/steps` | What each step did: `model_reasoning`, `model_text`, `tool_call`, `tool_result`, and `turn_failed` records. Query: `since_seq`, `limit` (≤ 1000, default 200); same paging as events. |
 | `GET` | `/sessions/{sessionId}/logs` | Detailed execution logs, including full model inputs. Retained for 14 days, at most the newest 2000 per session; export anything you need to keep longer. |
 | `GET` | `/sessions/{sessionId}/trace` | The transcript with timing spans, as the console's trace view shows it. |
 | `GET` | `/sessions/{sessionId}/runtime/spans` | Timing spans. Query: `since_seq`, `limit` (≤ 5000), `turn_id`, `name`. |
@@ -536,6 +536,28 @@ no longer kept.
 Event types include `turn:start`, `turn:end`, `turn:error`, `turn:blocked`,
 `input:absorbed`, `command:start`, `command:end`, and `session:terminated`.
 Clients must tolerate unknown event types.
+
+Every step record has `type` and `seq`; most also have `turnId` and
+`stepNumber`. `seq` is the seq of the event the record comes from, so several
+records can share one.
+`model_reasoning` and `model_text` carry `text`: what the model reasoned, and
+what it wrote, in that step. Both are cut at 2,048 characters; the full reply is
+in the session's messages. Within a step the records come in the order the
+model produced them: reasoning, text, then tool calls. A connector's
+`observe: [steps]` feed has no `model_text`; the connector already gets the
+reply through `deliver`.
+
+```jsonc
+// GET /sessions/ssn_.../steps?since_seq=0
+{
+  "steps": [
+    { "type": "model_text", "seq": 14, "turnId": "trn_...", "stepNumber": 2, "text": "It is 18°C in Paris." }
+  ],
+  "hasMore": false,
+  "nextSeq": 14,
+  "earliestAvailableSeq": 1
+}
+```
 
 ## Execution Snapshots
 
@@ -932,7 +954,7 @@ need an Admin key.
 | Method | Path | Body | Description |
 | --- | --- | --- | --- |
 | `GET` | `/billing/summary` | none | Token and estimated model cost totals, by agent, by model, and by day. |
-| `GET` | `/billing/usage` | query | Model call records, newest first. Query: `limit` (≤ 200), `offset`. |
+| `GET` | `/billing/usage` | query | Model call records, newest first. Query: `limit` (≤ 200), `offset`, `session_id` (only that session's records). |
 | `GET` | `/billing/plan` | none | Plan and this month's metered usage: `plan`, `status`, `month`, `steps`, `connectionDays`, `usageUsd`, `includedSteps`, `includedUsd`, `overageUsd`, `spendCapUsd`, `limitReached`. |
 | `PUT` | `/billing/spend-cap` | `{ "usd": 20 }` | Set the monthly overage cap of a paid plan (0 to 10000). Hobby and Pro only. |
 | `POST` | `/billing/checkout` | `{ "plan": "hobby" \| "pro" }` | Start a subscription checkout. Returns `{ "url" }`. |
