@@ -58,6 +58,11 @@
               },
               "description": "Default HTTP headers sent on every provider request (string values only)."
             },
+            "maxTokens": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Most tokens one model response may produce, thinking included. Unset, Anthropic Messages calls send the model's own maximum (8192 when it can't be read) and Chat Completions / Responses calls send no limit. A plugin's per-call limit wins over it."
+            },
             "requestMetadata": {
               "type": "boolean",
               "default": true,

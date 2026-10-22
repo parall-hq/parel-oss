@@ -83,6 +83,7 @@ Provider-specific options belong under `model.config`:
 | `credentialProvider` | Name of the workspace provider key to use, for example `openrouter` or `deepseek`: lowercase letters, digits, and dashes. |
 | `apiKey` | A key for this agent only, written as a `${NAME}` secret reference. It wins over the workspace provider key. Never write the key itself here. |
 | `headers` | String map sent on every provider request as default HTTP headers — for gateways that route or authorize by header (a lane header in front of a shared hostname, `HTTP-Referer` / `X-Title` for OpenRouter). Values can be `${NAME}` references. Non-string values are ignored. |
+| `maxTokens` | Positive integer: the most tokens one model response may produce, thinking included. Unset, Claude gets the model's own maximum and Chat Completions / Responses get no limit. See [Model Calls](model-calls.md#output-limit). |
 | `parameterDialect` | How output limits and reasoning are sent on Chat Completions APIs: `openai`, `openrouter`, or `compatible`. See [Model Calls](model-calls.md#parameter-formats). |
 | `thinkingMode` | Anthropic thinking: `adaptive`, `enabled`, or `disabled`. |
 | `requestMetadata` | Boolean, default `true`: generated model request correlation headers. See [Model Calls](model-calls.md#request-correlation). |
