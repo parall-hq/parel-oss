@@ -116,10 +116,42 @@ export interface PromptCacheHint {
 	volatility?: PromptCacheVolatility;
 }
 
+/** The prompt unit a cache breakpoint ends at. */
+export type PromptCacheTarget = "system" | "tools" | "message" | "content_part";
+
+export interface PromptCacheControl {
+	type: "ephemeral";
+	/** Must be one of the adapter's advertised `PromptCacheCapabilities.ttl`. */
+	ttl?: string;
+	/** Must be one of the adapter's advertised `PromptCacheCapabilities.scopes`. */
+	scope?: PromptCacheScope;
+}
+
+export interface PromptCacheBreakpoint {
+	target: PromptCacheTarget;
+	/** The message id, for target `message`. */
+	messageId?: string;
+	/** The part id, for target `content_part`. */
+	partId?: string;
+	cacheControl: PromptCacheControl;
+}
+
 export interface PromptCacheOptions {
+	/** `false` turns runtime breakpoint planning off for this call. */
 	enabled?: boolean;
+	/** `"off"` turns runtime breakpoint planning off; the runtime sets `"auto"` when it plans. */
 	mode?: "auto" | "off";
 	requireStableRequestShape?: boolean;
+	/**
+	 * Explicit breakpoint plan. A non-empty plan is sent as written and the
+	 * runtime plans nothing from `cacheHint`s; absent or empty lets it plan.
+	 * See protocol/model-calls.md#prompt-cache.
+	 */
+	breakpoints?: PromptCacheBreakpoint[];
+	/** Default TTL; same constraint as {@link PromptCacheControl.ttl}. */
+	ttl?: string;
+	/** Default scope; same constraint as {@link PromptCacheControl.scope}. */
+	scope?: PromptCacheScope;
 }
 
 export interface PromptCacheCapabilities {

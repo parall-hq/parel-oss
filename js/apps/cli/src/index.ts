@@ -358,6 +358,13 @@ const CAPABILITY_REGISTRY: CapabilityDefinition[] = [
 		requirements: [],
 	},
 	{
+		id: "prompt.cache",
+		label: "Prompt cache",
+		description: "Cache the conversation history, not just the system prompt and tools.",
+		source: { type: "plugin", package: "@parel/prompt-cache" },
+		requirements: [],
+	},
+	{
 		id: "budget.cap",
 		label: "Budget cap",
 		description: "Stop execution when configured spend or turn limits are reached.",
