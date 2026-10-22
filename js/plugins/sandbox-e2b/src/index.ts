@@ -1,4 +1,9 @@
-import { CommandExitError, type CommandResult, Sandbox } from "@e2b/code-interpreter";
+import {
+	CommandExitError,
+	type CommandResult,
+	Sandbox,
+	SandboxNotFoundError,
+} from "@e2b/code-interpreter";
 import {
 	PAREL_SANDBOX_CAPABILITY,
 	renderCommandText,
@@ -14,6 +19,8 @@ import {
 	type InvocationContext,
 	LifecycleEvent,
 	type ParelPlugin,
+	type SessionState,
+	type ToolHandlerReturn,
 } from "@parel/plugin-sdk";
 // Single source of truth for this plugin's static manifest (the secrets it needs).
 // Shipped at the package root (see package.json `files`) so the host can read it from
@@ -25,9 +32,27 @@ const STORE_KEY = "e2b_sandbox_id";
 const PROCESS_STORE_PREFIX = "e2b_process:";
 const PORT_STORE_PREFIX = "e2b_port:";
 const RECONNECT_RETRY_DELAYS_MS = [250, 1_000] as const;
+// Slack kept on top of a foreground command's time limit when lengthening the
+// sandbox's lifetime to cover it (see keepAliveFor).
+const LIFETIME_MARGIN_MS = 30_000;
 
 function wait(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * E2B's own answer that the sandbox does not exist (connect got a 404: it was
+ * reclaimed after its timeout, or deleted). Only this replaces a sandbox —
+ * timeouts, network errors and 5xx never do (an outage once looked like "gone"
+ * and replacing it wiped the user's files). Checked by name too, in case a
+ * second copy of the SDK class ends up in the bundle; a generic error whose
+ * message merely says "not found" does not count.
+ */
+function isSandboxGone(err: unknown): boolean {
+	return (
+		err instanceof SandboxNotFoundError ||
+		(err instanceof Error && err.name === "SandboxNotFoundError")
+	);
 }
 
 /**
@@ -285,9 +310,13 @@ export default definePlugin({
 
 	async setup(ctx) {
 		const template = (ctx.config.template as string) ?? "base";
+		// Idle time before E2B reclaims the sandbox (deletes it, or pauses it with
+		// persistence). E2B's timer does not restart on use: every create and
+		// reconnect sets it to at least `timeout` from now, and keepAliveFor
+		// lengthens it to cover a long foreground command.
 		const timeout = (ctx.config.timeout as number) ?? 300_000;
-		// Per-command budget for foreground runs; `timeout` above is the SANDBOX
-		// lifetime (kill/pause TTL), not a command timeout — the naming predates this.
+		// Per-command budget for foreground runs; `timeout` above is the sandbox's
+		// idle lifetime, not a command timeout — the naming predates this.
 		const commandTimeout = (ctx.config.commandTimeout as number) ?? DEFAULT_COMMAND_TIMEOUT_MS;
 		// Sync→async promotion threshold for the bash tool (0 = disabled, keeping
 		// the legacy foreground path and its exit-124 timeout semantics). When set,
@@ -306,7 +335,6 @@ export default definePlugin({
 		// the existing reconnect path (`Sandbox.connect`) transparently resumes
 		// it. Off by default: paused snapshots are retained by E2B indefinitely
 		// (storage accrues until `kill()`), so opting in is a billing decision.
-		// `timeout` then means "idle time before pause", not time-to-death.
 		const persistence = ctx.config.persistence === true;
 		// keepMemory=false (default) stores a filesystem-only snapshot: resume
 		// cold-boots from disk (processes/connections are NOT restored), which
@@ -319,6 +347,14 @@ export default definePlugin({
 		// command in the sandbox (no per-command prefix needed) — lets the host
 		// hand the in-sandbox process its credentials/config at boot time.
 		const envs = (ctx.config.env as Record<string, string> | undefined) ?? {};
+		// An explicitly configured sandboxId means the sandbox is managed outside
+		// PAREL (e.g. `sandboxId: ${var:SANDBOX_ID}`, one per instance). The plugin
+		// only connects to it: it never creates a replacement, never stores or
+		// migrates a handle, and never kills it — stop and session end just let go.
+		const externalId =
+			typeof ctx.config.sandboxId === "string" && ctx.config.sandboxId.trim()
+				? ctx.config.sandboxId.trim()
+				: undefined;
 
 		// Instance-scoped state (docs/agent-instance-model.md §4.3): when the host
 		// provides ctx.instanceStore, the sandbox belongs to the AGENT INSTANCE —
@@ -351,6 +387,32 @@ export default definePlugin({
 		// Bumped on teardown so an in-flight recovery can tell its result is
 		// stale and must not be published (or leak) after the session ended.
 		let sandboxEpoch = 0;
+		// Lower bound on when E2B reclaims the current sandbox: create and
+		// reconnect set its timer to at least `timeout` from now, keepAliveFor to
+		// at least a command's time limit. Lets keepAliveFor skip the API call
+		// while enough time is left.
+		let lifetime = { sandboxId: "", endsAt: 0 };
+		// Set when this session replaced a sandbox E2B no longer has; prefixed
+		// once to the next result of this plugin's own tools, so the model learns
+		// that the files it worked with are gone instead of puzzling over them.
+		let replacedNote: string | null = null;
+		// The session this plugin runs in, for the E2B metadata written at
+		// creation (a sandbox left behind can then be found by agent/instance in
+		// E2B). setup() gets no session; hook and tool contexts do.
+		let session: Readonly<SessionState> | undefined;
+
+		function sandboxMetadata(): Record<string, string> {
+			const tags: Record<string, string> = {};
+			if (session?.orgId) tags.parelOrgId = session.orgId;
+			if (session?.agentId) tags.parelAgentId = session.agentId;
+			if (ctx.instance?.key) tags.parelInstanceKey = ctx.instance.key;
+			if (session?.id) tags.parelSessionId = session.id;
+			return tags;
+		}
+
+		function noteLifetime(s: Sandbox, ms: number): void {
+			lifetime = { sandboxId: s.sandboxId, endsAt: Date.now() + ms };
+		}
 
 		async function createRawSandbox(): Promise<Sandbox> {
 			if (!apiKey) {
@@ -368,6 +430,7 @@ export default definePlugin({
 					timeoutMs: timeout,
 					apiKey,
 					envs,
+					metadata: sandboxMetadata(),
 					...(persistence
 						? { lifecycle: { onTimeout: { action: "pause" as const, keepMemory } } }
 						: {}),
@@ -376,6 +439,7 @@ export default definePlugin({
 				const msg = err instanceof Error ? err.message : "Unknown error";
 				throw new Error(`Failed to create E2B sandbox: ${msg}`, { cause: err });
 			}
+			noteLifetime(s, timeout);
 			ctx.log.info(
 				`E2B sandbox created: ${s.sandboxId}${persistence ? " (persistent: pause-on-timeout)" : ""}`,
 			);
@@ -389,22 +453,30 @@ export default definePlugin({
 			return s;
 		}
 
-		async function reconnectSandbox(sandboxId: string): Promise<Sandbox> {
-			// For a PAUSED sandbox (persistence mode) connect() transparently
-			// resumes it — with keepMemory=false that's a cold boot from the
-			// filesystem snapshot (a few seconds), with keepMemory=true a warm
-			// ~1s memory restore. Recovery is deliberately fail-closed: no reconnect
-			// error, including an explicit not-found, may replace or delete the stored
-			// sandbox. Transient errors get short retries; the final error preserves
-			// the handle so an operator or a later attempt can recover it.
+		// Reconnect by id (the rule table in the README):
+		// - connected: use it. `timeoutMs` sets its timer to at least `timeout`
+		//   from now — E2B only ever lengthens a running sandbox's timer.
+		// - E2B says it does not exist (isSandboxGone): null. The caller decides
+		//   between a replacement (managed) and an error (config.sandboxId).
+		// - anything else (timeout, network, 5xx): retry briefly, then throw with
+		//   the stored handle untouched — never a replacement, never a kill.
+		// For a PAUSED sandbox (persistence mode) connect() transparently resumes
+		// it — with keepMemory=false that's a cold boot from the filesystem
+		// snapshot (a few seconds), with keepMemory=true a warm ~1s memory restore.
+		async function reconnectSandbox(sandboxId: string): Promise<Sandbox | null> {
 			const attempts = RECONNECT_RETRY_DELAYS_MS.length + 1;
 			let lastError: unknown;
 			for (let attempt = 1; attempt <= attempts; attempt++) {
 				try {
-					const s = await Sandbox.connect(sandboxId, { apiKey });
+					const s = await Sandbox.connect(sandboxId, { apiKey, timeoutMs: timeout });
+					noteLifetime(s, timeout);
 					ctx.log.info(`Reconnected to E2B sandbox: ${sandboxId}`);
 					return s;
 				} catch (err: unknown) {
+					if (isSandboxGone(err)) {
+						ctx.log.warn(`E2B sandbox ${sandboxId} no longer exists`);
+						return null;
+					}
 					lastError = err;
 					const name = err instanceof Error ? err.name || "Error" : "NonErrorThrown";
 					const message = err instanceof Error ? err.message : String(err);
@@ -417,7 +489,7 @@ export default definePlugin({
 			const name = lastError instanceof Error ? lastError.name || "Error" : "NonErrorThrown";
 			const message = lastError instanceof Error ? lastError.message : String(lastError);
 			throw new Error(
-				`Failed to reconnect to E2B sandbox ${sandboxId} after ${attempts} attempts; automatic replacement and deletion are disabled, and its stored handle and filesystem were preserved. Retry later. Last error: ${name}: ${message}`,
+				`Failed to reconnect to E2B sandbox ${sandboxId} after ${attempts} attempts; it was not replaced or deleted, and its stored handle and filesystem were preserved. Retry later. Last error: ${name}: ${message}`,
 				{ cause: lastError },
 			);
 		}
@@ -431,6 +503,19 @@ export default definePlugin({
 				ctx.log.warn(`Failed to kill E2B sandbox ${sandboxId}: ${msg}`);
 				return false;
 			}
+		}
+
+		// A sandbox E2B no longer has was just replaced and the new handle
+		// published: its process/port records describe the dead machine, and the
+		// model has to be told its files are gone.
+		async function noteReplaced(goneId: string, fresh: Sandbox): Promise<void> {
+			ctx.log.warn(`E2B sandbox ${goneId} no longer exists; replaced by ${fresh.sandboxId}`);
+			await clearRecordsFor("sandbox no longer exists");
+			replacedNote =
+				`[sandbox] The previous sandbox (${goneId}) no longer exists — E2B reclaims a sandbox ` +
+				`left unused longer than its timeout — so this runs in a new, empty one ` +
+				`(${fresh.sandboxId}). Files, installed packages and running processes from earlier ` +
+				`turns are gone.`;
 		}
 
 		// Process/port records belong to their sandbox. When the legacy sandbox
@@ -462,7 +547,13 @@ export default definePlugin({
 			if (!legacy) return;
 			const authoritative = await istore.get<string>(STORE_KEY);
 			if (!authoritative) {
-				await reconnectSandbox(legacy);
+				if (!(await reconnectSandbox(legacy))) {
+					// E2B no longer has it: nothing to promote or reap. The acquire
+					// that follows creates the instance's first sandbox.
+					await ctx.store.delete(STORE_KEY);
+					await moveLegacyRecords(false);
+					return;
+				}
 				if (await istore.cas(STORE_KEY, null, legacy)) {
 					await ctx.store.delete(STORE_KEY);
 					await moveLegacyRecords(true);
@@ -482,9 +573,11 @@ export default definePlugin({
 		// Instance mode: acquire the ONE sandbox shared by every session of this
 		// agent instance. The authoritative handle lives in the instance store;
 		// all mutations go through cas() because sibling sessions' turns race
-		// here during cold starts. A reconnect failure is surfaced without
-		// changing the authoritative handle. The loser of a cold-start race kills
-		// only the fresh sandbox it just created, then adopts the winner's sandbox.
+		// here during cold starts and replacements. A transient reconnect failure
+		// is surfaced without changing the authoritative handle; a sandbox E2B no
+		// longer has is replaced, published only over the exact version seen gone.
+		// The loser of a race kills only the fresh sandbox it just created, then
+		// adopts the winner's sandbox.
 		async function acquireSharedSandbox(): Promise<Sandbox> {
 			if (!istore) throw new Error("acquireSharedSandbox requires an instance store");
 			await migrateLegacyHandle();
@@ -492,33 +585,113 @@ export default definePlugin({
 				const entry = await istore.get<string>(STORE_KEY);
 				if (entry) {
 					const reconnected = await reconnectSandbox(entry.value);
-					// The handle can change only during a cold-start publication or an
-					// explicit stop. Adopt it only while it remains authoritative.
-					const current = await istore.get<string>(STORE_KEY);
-					if (current?.value === entry.value) return reconnected;
-					continue;
+					if (reconnected) {
+						// The handle can change during a publication or an explicit stop.
+						// Adopt it only while it remains authoritative.
+						const current = await istore.get<string>(STORE_KEY);
+						if (current?.value === entry.value) return reconnected;
+						continue;
+					}
+					// E2B no longer has it: replace it below.
 				}
 				const fresh = await createRawSandbox();
-				if (await istore.cas(STORE_KEY, null, fresh.sandboxId)) return fresh;
-				// Lost the cold-start race — exactly one sibling won; use theirs.
+				if (await istore.cas(STORE_KEY, entry?.version ?? null, fresh.sandboxId)) {
+					if (entry) await noteReplaced(entry.value, fresh);
+					return fresh;
+				}
+				// Lost the race — a sibling published first (a cold start, its own
+				// replacement, or a stop); reap ours and re-read.
 				await killSandboxById(fresh.sandboxId);
 			}
 			throw new Error("E2B sandbox acquisition kept losing instance-store races; giving up");
 		}
 
-		// Reconnect to the stored sandbox if there is one, else create fresh.
-		// Shared by the SessionResume warm path and the ensureSandbox fallback.
-		// Per-session mode only; instance mode uses acquireSharedSandbox.
+		// Reconnect to the stored sandbox if there is one, else create fresh — also
+		// when E2B no longer has the stored one. Shared by the SessionResume warm
+		// path and the ensureSandbox fallback. Per-session mode only; instance
+		// mode uses acquireSharedSandbox.
 		async function acquireSandbox(): Promise<Sandbox> {
 			const savedId = await ctx.store.get<string>(STORE_KEY);
-			if (savedId) return reconnectSandbox(savedId);
-			return createSandbox();
+			if (savedId) {
+				const s = await reconnectSandbox(savedId);
+				if (s) return s;
+			}
+			const fresh = await createSandbox();
+			if (savedId) await noteReplaced(savedId, fresh);
+			return fresh;
 		}
 
-		// Mode dispatch: instance mode shares one sandbox per agent instance,
-		// per-session mode keeps the historical one-sandbox-per-session behavior.
+		// config.sandboxId: connect to the externally managed sandbox and nothing
+		// else — no stored handle, and never a replacement.
+		async function connectExternal(sandboxId: string): Promise<Sandbox> {
+			if (sandboxId.includes("${")) {
+				// A var with no value stays in plugin config as literal text.
+				throw new Error(
+					`E2B config.sandboxId is the unresolved reference "${sandboxId}" — give that var a value for this instance`,
+				);
+			}
+			const s = await reconnectSandbox(sandboxId);
+			if (s) return s;
+			throw new Error(
+				`E2B sandbox ${sandboxId} (config.sandboxId) does not exist. It is managed outside PAREL, so the plugin does not create a replacement — point sandboxId at a live sandbox.`,
+			);
+		}
+
+		// Mode dispatch: config.sandboxId only connects; instance mode shares one
+		// sandbox per agent instance; per-session mode keeps the historical
+		// one-sandbox-per-session behavior.
 		function acquire(): Promise<Sandbox> {
+			if (externalId) return connectExternal(externalId);
 			return istore ? acquireSharedSandbox() : acquireSandbox();
+		}
+
+		// Make the sandbox outlive a foreground command: E2B's timer does not
+		// restart on use, so a long command could be cut off by the sandbox being
+		// reclaimed mid-run. Skipped while the known lifetime already covers it
+		// (the common case — each step's reconnect just set it to `timeout`).
+		// Uses connect({ timeoutMs }), not setTimeout(): on a running sandbox
+		// connect only ever lengthens the timer, while setTimeout can also
+		// shorten it and cut short a sibling session's longer extension of a
+		// shared sandbox. Extends one margin past what is needed, so a burst of
+		// commands does not call E2B for each one. Best-effort: on failure the
+		// command runs anyway.
+		async function keepAliveFor(s: Sandbox, commandMs: number): Promise<void> {
+			const needMs = commandMs + HOST_TIMEOUT_BUFFER_MS + LIFETIME_MARGIN_MS;
+			if (lifetime.sandboxId === s.sandboxId && lifetime.endsAt >= Date.now() + needMs) return;
+			const extendMs = needMs + LIFETIME_MARGIN_MS;
+			try {
+				await s.connect({ timeoutMs: extendMs });
+				noteLifetime(s, extendMs);
+			} catch (err: unknown) {
+				const msg = err instanceof Error ? err.message : String(err);
+				ctx.log.warn(
+					`Failed to extend E2B sandbox ${s.sandboxId} lifetime to ${extendMs}ms: ${msg}`,
+				);
+			}
+		}
+
+		// Prefix the one-time replacement note (see noteReplaced) to what one of
+		// this plugin's own tools returns or throws. Taken after the call, so a
+		// replacement made by this very call is included.
+		async function withReplacedNote(run: Promise<ToolHandlerReturn>): Promise<ToolHandlerReturn> {
+			const takeNote = () => {
+				const note = replacedNote;
+				replacedNote = null;
+				return note;
+			};
+			try {
+				const out = await run;
+				const note = takeNote();
+				if (!note) return out;
+				return typeof out === "string"
+					? `${note}\n\n${out}`
+					: { ...out, content: `${note}\n\n${out.content}` };
+			} catch (err: unknown) {
+				const note = takeNote();
+				if (!note) throw err;
+				const msg = err instanceof Error ? err.message : String(err);
+				throw new Error(`${note}\n\n${msg}`, { cause: err });
+			}
 		}
 
 		// Tool/capability call path. Lifecycle hooks stay the warm path; this is
@@ -534,7 +707,9 @@ export default definePlugin({
 			// against its own captured reference, not re-read the mutated slot.
 			const cached = sandbox;
 			if (cached) {
-				if (!istore) return cached;
+				// Per-session and config.sandboxId modes never swap the handle behind
+				// our back, so a cached handle is current.
+				if (!istore || externalId) return cached;
 				// Instance mode: a sibling or an explicit lifecycle action may have
 				// published a different shared handle. A cached local handle would
 				// silently split the instance's "one shared filesystem". One
@@ -550,12 +725,13 @@ export default definePlugin({
 					.then(async (s) => {
 						if (epoch !== sandboxEpoch) {
 							// The session tore down while this recovery was in flight.
-							if (istore) {
+							if (istore || externalId) {
 								// Instance mode: the acquired sandbox is (or just became)
 								// the instance's shared sandbox — sibling sessions own it
 								// too, so just drop our reference. Any orphan we created
 								// and lost a race with was already reaped inside
-								// acquireSharedSandbox.
+								// acquireSharedSandbox. A config.sandboxId sandbox is not
+								// ours to reap either.
 								throw new Error("E2B sandbox recovery discarded: session torn down");
 							}
 							// Per-session mode: nothing else will ever clean it up —
@@ -590,8 +766,9 @@ export default definePlugin({
 
 		// Drop this session's reference to the shared sandbox WITHOUT killing it:
 		// in instance mode the sandbox belongs to the agent instance, and sibling
-		// sessions (or the next conversation) keep using it. E2B's own idle
-		// timeout / pause-on-timeout governs its lifetime from here.
+		// sessions (or the next conversation) keep using it; a config.sandboxId
+		// sandbox is managed outside PAREL. E2B's own idle timeout /
+		// pause-on-timeout governs its lifetime from here.
 		async function releaseSandbox(): Promise<void> {
 			sandboxEpoch++;
 			if (sandboxRecovery) {
@@ -653,11 +830,12 @@ export default definePlugin({
 
 		// --- Lifecycle hooks ---
 
-		ctx.hook(LifecycleEvent.SessionStart, async () => {
+		ctx.hook(LifecycleEvent.SessionStart, async (hookCtx) => {
+			session ??= hookCtx?.session;
 			// Instance mode: adopt the instance's existing sandbox instead of
 			// unconditionally creating one — this is where sibling sessions start
-			// sharing a machine.
-			sandbox = istore ? await acquire() : await createSandbox();
+			// sharing a machine. config.sandboxId: connect to it.
+			sandbox = istore || externalId ? await acquire() : await createSandbox();
 		});
 
 		ctx.hook(LifecycleEvent.SessionEnd, async () => {
@@ -665,28 +843,40 @@ export default definePlugin({
 			// for an ephemeral instance (try-run/replay), which dies with the
 			// session: its store is discarded, so nothing could ever stop the
 			// sandbox later, and a persistence-mode paused snapshot would be
-			// billed indefinitely.
-			if (istore && !ctx.instance?.ephemeral) await releaseSandbox();
+			// billed indefinitely. A config.sandboxId sandbox is never ours to kill.
+			if (externalId || (istore && !ctx.instance?.ephemeral)) await releaseSandbox();
 			else await destroySandbox();
 		});
 
 		ctx.hook(LifecycleEvent.SessionSuspend, async () => {
 			// Instance mode: the authoritative handle is already in the instance
-			// store (written at creation/adoption) — nothing to save.
-			if (!istore && sandbox) {
+			// store (written at creation/adoption) — nothing to save. config.sandboxId
+			// is never stored: a stored id would be killed on session end if the
+			// option were later removed.
+			if (!istore && !externalId && sandbox) {
 				await ctx.store.set(STORE_KEY, sandbox.sandboxId);
 				ctx.log.info(`Sandbox ID saved for resume: ${sandbox.sandboxId}`);
 			}
 		});
 
-		ctx.hook(LifecycleEvent.SessionResume, async () => {
+		ctx.hook(LifecycleEvent.SessionResume, async (hookCtx) => {
+			session ??= hookCtx?.session;
 			// Reconnect unconditionally: a stale in-memory handle may point at a
-			// sandbox that has since paused, and connect() is what resumes it.
-			// Clear the handle first — if the resume fails entirely, a lingering
-			// stale handle would satisfy ensureSandbox forever and block the
-			// self-healing retry; null lets the next tool call recover.
+			// sandbox that has since paused, and connect() is what resumes it (and
+			// sets its idle timer back to `timeout`). Clear the handle first — if
+			// the resume fails, a lingering stale handle would satisfy
+			// ensureSandbox forever and block the self-healing retry. A failure
+			// must not fail the step either: the step may not need the sandbox at
+			// all, and the first call that does retries and reports the error.
 			sandbox = null;
-			sandbox = await acquire();
+			try {
+				sandbox = await acquire();
+			} catch (err: unknown) {
+				const msg = err instanceof Error ? err.message : String(err);
+				ctx.log.warn(
+					`E2B sandbox not reconnected on resume; the next sandbox call retries: ${msg}`,
+				);
+			}
 		});
 
 		// --- Capabilities ---
@@ -769,6 +959,7 @@ export default definePlugin({
 			// resumed sandbox.)
 			const commandEnv =
 				Object.keys(envs).length > 0 || turnEnv ? { ...envs, ...(turnEnv ?? {}) } : undefined;
+			await keepAliveFor(s, commandTimeout);
 			try {
 				return await runBounded(
 					s.commands.run(command, {
@@ -799,6 +990,7 @@ export default definePlugin({
 			// Same resume caveat as the bash tool: carry `config.env` as the
 			// per-command base. The caller's opts.env rides the shell prefix built by
 			// applyShellOptions, which naturally overrides the process environment.
+			await keepAliveFor(s, timeoutMs);
 			let result: CommandResult;
 			try {
 				result = await runBounded(
@@ -838,14 +1030,16 @@ export default definePlugin({
 			const dir = processLogDir(id);
 			const stdoutPath = `${dir}/stdout.log`;
 			const stderrPath = `${dir}/stderr.log`;
+			// The sync window is a foreground wait like any other command.
+			await keepAliveFor(s, promoteAfterMs);
 			const handle = await s.commands.run(
 				backgroundCommand(command, stdoutPath, stderrPath, `${dir}/exit_code`),
 				{
 					background: true,
 					...(commandEnv ? { envs: commandEnv } : {}),
 					// Explicit ceiling: the SDK's default timeoutMs (60s) would kill the
-					// command mid-promotion. The sandbox lifetime is the honest upper
-					// bound — beyond it the sandbox pauses/dies anyway.
+					// command mid-promotion. `timeout` is the honest bound: a sandbox
+					// left unused that long pauses/dies anyway.
 					timeoutMs: Math.max(timeout, promoteAfterMs),
 				},
 			);
@@ -939,16 +1133,17 @@ export default definePlugin({
 					.catch(() => ""),
 			]);
 			const seconds = Math.round(promoteAfterMs / 1000);
-			// The sandbox lifetime (config `timeout`) is the HARD cap: the SDK
-			// kills the command at that age and the sandbox pauses at the same
-			// point. Say so — "it keeps running" without the bound would be a lie.
+			// Config `timeout` is the HARD cap: the SDK kills the command at that
+			// age, and a sandbox left unused that long pauses/dies. Say so — "it
+			// keeps running" without the bound would be a lie.
 			const lifetimeSeconds = Math.round(timeout / 1000);
 			return {
 				content:
 					`Command still running after ${seconds}s — promoted to a background process (processId: ${id}). ` +
-					`It keeps running in the sandbox, hard-capped by the sandbox lifetime (~${lifetimeSeconds}s from ` +
-					`sandbox creation, config timeout) — when the sandbox pauses the process does not survive ` +
-					`(unless keepMemory is enabled), though the output files written so far do. ` +
+					`It keeps running in the sandbox for at most ~${lifetimeSeconds}s (config timeout), and only ` +
+					`while the sandbox stays in use — a sandbox left unused that long is reclaimed (or paused, ` +
+					`with persistence: the process stops unless keepMemory is enabled, but the output files ` +
+					`written so far survive). ` +
 					`Its exit code is written to ${dir}/exit_code on completion. ` +
 					`Check on it with the process tools (tail/list) using processId ${id}.` +
 					(tail.trim() ? `\nOutput so far (tail):\n${tail}` : "") +
@@ -1019,7 +1214,9 @@ export default definePlugin({
 					return sandbox !== null;
 				},
 				async stop() {
-					await destroySandbox();
+					// A config.sandboxId sandbox is managed outside PAREL: only let go.
+					if (externalId) await releaseSandbox();
+					else await destroySandbox();
 				},
 			},
 		};
@@ -1178,12 +1375,15 @@ export default definePlugin({
 					required: ["command"],
 				},
 			},
-			async (params, toolCtx) =>
-				promoteAfterMs > 0
-					? runPromotableBash(params.command as string, toolCtx.invocationContext)
-					: renderCommandToolOutput(
-							await runExecCommand(params.command as string, toolCtx.invocationContext),
-						),
+			async (params, toolCtx) => {
+				session ??= toolCtx.session;
+				const command = params.command as string;
+				return withReplacedNote(
+					promoteAfterMs > 0
+						? runPromotableBash(command, toolCtx.invocationContext)
+						: runExecCommand(command, toolCtx.invocationContext).then(renderCommandToolOutput),
+				);
+			},
 		);
 
 		ctx.tool(
@@ -1198,7 +1398,10 @@ export default definePlugin({
 					required: ["path"],
 				},
 			},
-			async (params) => filesystem.readFile(params.path as string),
+			async (params, toolCtx) => {
+				session ??= toolCtx.session;
+				return withReplacedNote(filesystem.readFile(params.path as string));
+			},
 		);
 
 		ctx.tool(
@@ -1214,9 +1417,13 @@ export default definePlugin({
 					required: ["path", "content"],
 				},
 			},
-			async (params) => {
-				await filesystem.writeFile(params.path as string, params.content as string);
-				return "File written successfully";
+			async (params, toolCtx) => {
+				session ??= toolCtx.session;
+				return withReplacedNote(
+					filesystem
+						.writeFile(params.path as string, params.content as string)
+						.then(() => "File written successfully"),
+				);
 			},
 		);
 	},
