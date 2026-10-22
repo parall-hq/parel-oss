@@ -104,7 +104,7 @@ entry and does not fail the request.
 | `model_error` | turn | The model call failed. |
 | `model_timeout` | turn | The model call took too long. |
 | `model_output_limit` | turn | The reply hit the output token limit. |
-| `model_filtered` | turn | The provider's content filter stopped the reply. |
+| `model_filtered` | turn | The provider's content filter stopped the reply, or the model refused. A refusal's reason names the provider's refusal category when there is one. Not retried. |
 | `model_incomplete` | turn | The reply ended without a normal end, or with unfinished tool arguments. |
 | `context_window_exceeded` | turn | The conversation no longer fits in the model's context window. |
 | `billing_insufficient` | 409 | The Free plan's steps are used up, or the spend cap is reached. |
