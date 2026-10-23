@@ -1,6 +1,6 @@
 {
   "name": "@parel/agents-md",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Loads AGENTS.md project instructions from the sandbox into the model's context.",
   "keywords": [
     "parel",

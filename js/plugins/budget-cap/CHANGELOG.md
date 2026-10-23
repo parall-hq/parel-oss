@@ -1,5 +1,13 @@
 # @parel/budget-cap
 
+## 0.0.33
+
+### Patch Changes
+
+- d99589c: Log one warning per session when the session has used tokens but its cost is still `$0`: the model has no price (an unpriced model on your own key), so `max_usd` cannot take effect. Before, the cap silently never fired. `max_turns` is unaffected.
+- Updated dependencies [0b7ee7d]
+  - @parel/plugin-sdk@0.18.0
+
 ## 0.0.32
 
 ### Patch Changes
