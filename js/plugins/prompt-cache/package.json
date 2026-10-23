@@ -1,6 +1,6 @@
 {
   "name": "@parel/prompt-cache",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "PAREL plugin that caches the conversation history, not just the system prompt and tools.",
   "keywords": [
     "parel",
