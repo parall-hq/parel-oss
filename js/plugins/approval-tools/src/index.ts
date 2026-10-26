@@ -1,8 +1,5 @@
 import {
 	definePlugin,
-	type InputQueue,
-	type InputQueueItem,
-	LifecycleEvent,
 	type Message,
 	type ToolHandlerContext,
 	type ToolOutput,
@@ -117,27 +114,6 @@ function parseApprovalResult(payload: unknown): ApprovalResultPayload | null {
 	};
 }
 
-function isApprovalResultCallback(item: InputQueueItem): boolean {
-	return parseApprovalResult(item.payload) !== null;
-}
-
-function drainApprovalResultInputs(inputs: InputQueue): InputQueueItem[] {
-	if (inputs.drainWhere) return inputs.drainWhere("async_callback", isApprovalResultCallback);
-
-	const asyncCallbacks = inputs.drain("async_callback");
-	const approvalCallbacks: InputQueueItem[] = [];
-
-	for (const item of asyncCallbacks) {
-		if (isApprovalResultCallback(item)) {
-			approvalCallbacks.push(item);
-			continue;
-		}
-		inputs.push({ type: item.type, payload: item.payload, source: item.source });
-	}
-
-	return approvalCallbacks;
-}
-
 function approvalMessage(payload: ApprovalResultPayload): Message {
 	const comment = payload.comment ? `\n${payload.comment}` : "";
 	return {
@@ -154,9 +130,9 @@ function approvalMessage(payload: ApprovalResultPayload): Message {
 
 export default definePlugin({
 	name: "@parel/approval-tools",
-	version: "0.1.0",
-	provides: { hooks: true, tools: true },
-	requires: { permissions: { inputs: true, store: true } },
+	version: "0.2.0",
+	provides: { tools: true, normalize: ["async_callback"] },
+	requires: { permissions: { store: true } },
 
 	async setup(ctx) {
 		ctx.tool(
@@ -244,41 +220,36 @@ export default definePlugin({
 			{ scheduling: { defaultMode: "parallel" }, isConcurrencySafe: () => true },
 		);
 
-		ctx.hook(LifecycleEvent.ContextBuild, async (hookCtx) => {
-			const callbacks = drainApprovalResultInputs(hookCtx.inputs);
-			if (callbacks.length === 0) return;
-
-			const messages: Message[] = [];
-			for (const item of callbacks) {
-				const payload = parseApprovalResult(item.payload);
-				if (!payload) continue;
-				const existing = await hookCtx.store.get<ApprovalRequestRecord>(
-					storeKey(payload.approvalId),
-				);
-				const record: ApprovalRequestRecord = {
-					approvalId: payload.approvalId,
-					status: payload.status,
-					action: existing?.action ?? "(external approval)",
-					risk: existing?.risk ?? "medium",
-					requestedAt: existing?.requestedAt ?? new Date(item.timestamp).toISOString(),
-					...(existing?.reason ? { reason: existing.reason } : {}),
-					...(existing?.details ? { details: existing.details } : {}),
-					...(existing?.requestedByToolCallId
-						? { requestedByToolCallId: existing.requestedByToolCallId }
-						: {}),
-					resolvedAt: new Date(item.timestamp).toISOString(),
-					...(payload.resolvedBy ? { resolvedBy: payload.resolvedBy } : {}),
-					...(payload.comment ? { comment: payload.comment } : {}),
-				};
-				await hookCtx.store.set(storeKey(payload.approvalId), record);
-				messages.push(approvalMessage(payload));
-			}
-
-			if (messages.length === 0) return;
-			return {
-				action: "continue" as const,
-				mutations: { messages: [...hookCtx.messages, ...messages] },
+		// Approval results are delivered as durable transcript messages via the
+		// normalizeInput protocol (turn-start materialization). The previous
+		// ContextBuild drain injected the same rendering ephemerally — the message
+		// evaporated with the step, and a host that woke a turn for an undrained
+		// callback could re-fire forever (parel #187). Returning `null` defers
+		// non-approval callbacks to other normalizers or the host fallback.
+		ctx.normalize?.(["async_callback"], async (_type, payload, normalizeCtx) => {
+			const parsed = parseApprovalResult(payload);
+			if (!parsed) return null;
+			const existing = await normalizeCtx.store.get<ApprovalRequestRecord>(
+				storeKey(parsed.approvalId),
+			);
+			const resolvedAt = new Date().toISOString();
+			const record: ApprovalRequestRecord = {
+				approvalId: parsed.approvalId,
+				status: parsed.status,
+				action: existing?.action ?? "(external approval)",
+				risk: existing?.risk ?? "medium",
+				requestedAt: existing?.requestedAt ?? resolvedAt,
+				...(existing?.reason ? { reason: existing.reason } : {}),
+				...(existing?.details ? { details: existing.details } : {}),
+				...(existing?.requestedByToolCallId
+					? { requestedByToolCallId: existing.requestedByToolCallId }
+					: {}),
+				resolvedAt,
+				...(parsed.resolvedBy ? { resolvedBy: parsed.resolvedBy } : {}),
+				...(parsed.comment ? { comment: parsed.comment } : {}),
 			};
+			await normalizeCtx.store.set(storeKey(parsed.approvalId), record);
+			return [approvalMessage(parsed)];
 		});
 	},
 });
