@@ -68,7 +68,20 @@ export interface HookEventMap {
 	"turn:end": { ctx: EmptyCtx; mut: never };
 	"step:start": { ctx: EmptyCtx; mut: never };
 	"context:build": {
-		ctx: { system: string; messages: Message[] };
+		ctx: {
+			system: string;
+			/**
+			 * The context being built: the step's RECENT history (the host's window —
+			 * by default the newest 8 MiB of the transcript), not the whole
+			 * transcript, plus whatever earlier hooks of this event set.
+			 *
+			 * @deprecated Read history through `hookCtx.transcript.read(range)`
+			 * (unranged = the whole path). Hosts record which plugins still read this
+			 * field; returning `mutations.messages` to shape the model's context is
+			 * unchanged.
+			 */
+			messages: Message[];
+		};
 		mut: { system?: string; messages?: Message[] };
 	};
 	"model:before": {
@@ -106,7 +119,8 @@ export interface TranscriptReadRange {
  * contexts as `hookCtx.transcript`. It is the hook's INPUT, not a capability:
  * the host owns the rows (and where they live); a plugin only ever reads. A
  * plugin that declares `consumes.transcript: "lazy"` pulls what it needs here
- * instead of receiving the full `messages` array on every dispatch.
+ * instead of receiving the step's recent history as `messages` on every
+ * dispatch. An unranged `read()` returns the whole path.
  * `generation` moves only when the live tail was rewritten (never on ordinary
  * appends), so a caching plugin knows when to drop its copy.
  */

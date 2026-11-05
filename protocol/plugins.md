@@ -242,6 +242,18 @@ the plugin could duplicate external actions.
 | `checkpoint` | Checkpoint created. |
 | `error` | Runtime error observed. |
 
+### `context:build` history
+
+`hookCtx.messages` on `context:build` carries the step's **recent** history —
+the host's window, by default the newest 8 MiB of the transcript — not the whole
+transcript. A plugin that needs older history reads it through
+`hookCtx.transcript.read({ fromSeq, toSeq, limit })`; an unranged `read()`
+returns the whole path. `hookCtx.messages` is deprecated as a way to read
+history: hosts record which plugins still read it. Returning
+`mutations.messages` to shape what the model sees is unchanged. Media is
+projected the same way on both surfaces (the newest media per request keep
+their bytes; older ones become text placeholders).
+
 ## Hook Actions
 
 Hooks may continue, skip, block, suspend, or stop. Blocking and stopping must include a human-readable reason.
