@@ -14,7 +14,7 @@ agent:
 
 model:
   provider: anthropic
-  model: claude-sonnet-5
+  model: claude-sonnet-5-5
 
 plugins:
   - plugin: system-static
@@ -64,16 +64,27 @@ without an error, so validate against the schema to catch misspellings.
 
 | `provider` | API family | Provider key it uses |
 | --- | --- | --- |
+| `parel` | Any other PAREL-hosted model, by vendor/model name (e.g. `deepseek/deepseek-v4.1-flash`) | none: PAREL's, billed to the workspace |
 | `anthropic` | Anthropic Messages API | `anthropic` |
 | `openai` | OpenAI Chat Completions API | `openai` |
 | `openai-responses` | OpenAI Responses API | `openai` |
 | `openai-compatible` | OpenAI Chat Completions API at `config.baseUrl` | `config.credentialProvider` (default: the provider name) |
 | `anthropic-compatible` | Anthropic Messages API at `config.baseUrl` | `config.credentialProvider` (default: the provider name) |
 
-PAREL does not supply model keys. A model call uses `model.config.apiKey` when
-it is set, otherwise the workspace's provider key for the credential provider
-in the table, added in the console under Settings → Model providers or with
-`parel provider-keys set`. With neither, the turn fails with `provider_auth`.
+A model call uses `model.config.apiKey` when it is set, otherwise the
+workspace's provider key for the credential provider in the table, added in the
+console under Settings → Model providers or with `parel provider-keys set`; that
+provider bills the workspace directly.
+
+On the hosted service, a model the workspace gave **no key at all** runs on
+PAREL-hosted models instead: an `anthropic`, `openai` or `openai-responses` model
+on its default endpoint with neither key, and any `parel` model. Each call is
+billed to the workspace at the model provider's price, with no markup. Claude
+keeps the Anthropic Messages format, so prompt caching and thinking behave as on
+your own key. A key you did give never falls back: one that can't be found or
+read fails the turn with `provider_auth`, and so does a custom `baseUrl` or
+`-compatible` endpoint with no key. With `provider: parel`, `config.baseUrl`,
+`config.apiKey` and `config.credentialProvider` are rejected.
 
 Provider-specific options belong under `model.config`:
 

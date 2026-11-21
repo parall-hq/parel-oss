@@ -35,7 +35,7 @@ agent:
   name: hello-agent
 model:
   provider: anthropic
-  model: claude-sonnet-5
+  model: claude-sonnet-5-5
 plugins:
   - plugin: system-static
     config:
