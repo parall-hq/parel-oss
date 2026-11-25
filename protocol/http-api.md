@@ -135,8 +135,10 @@ retries stay within the current call and occur only before output, sharing one
 total budget.
 
 `GET /sessions/{sessionId}/steps` includes durable failure evidence as
-`{ "type": "turn_failed", "seq": number, "turnId": string, "reason": string }`,
-including failures after visible progress. Clients should deduplicate by the
+`{ "type": "turn_failed", "seq": number, "turnId": string, "reason": string, "code"?: string }`,
+including failures after visible progress. `code` is the failure's stable error
+code when it has one (for example `turn_stopped` or `session_terminated`), the
+same as the receipt's `errorCode`. Clients should deduplicate by the
 normal step cursor and tolerate unknown step types.
 
 Session termination and `POST /sessions/{sessionId}/stop` cancel active model
