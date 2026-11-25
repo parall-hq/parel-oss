@@ -453,12 +453,14 @@ export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
 export interface ReasoningConfig {
 	enabled: boolean;
-	/** Thinking budget in tokens, for providers that take a fixed budget. */
+	/**
+	 * Thinking budget in tokens, used when effort is unset: budget fields get it
+	 * as is, level fields (Claude adaptive thinking, OpenAI reasoning effort) the
+	 * level it stands for. See protocol/model-calls.md#reasoning.
+	 */
 	budgetTokens?: number;
 	/**
-	 * Thinking effort. Wins over budgetTokens: a level asks for level-based
-	 * reasoning (Claude adaptive thinking, OpenAI reasoning effort), a budget
-	 * alone for budget-based reasoning; neither means medium. See
+	 * Thinking effort. Wins over budgetTokens; neither means medium. See
 	 * protocol/model-calls.md#reasoning.
 	 */
 	effort?: ReasoningEffort;
