@@ -115,6 +115,18 @@ older models that require it. Manual thinking must fit below the
 a request. Provider configuration changes follow normal immutable agent
 versioning; existing pinned sessions are not rewritten.
 
+### Reasoning state on the `openrouter` dialect
+
+OpenRouter returns a model's reasoning state as `reasoning_details` next to its
+reasoning text. For Gemini (`format: google-gemini-v1`) this array carries the
+thought signatures the model needs to continue its own reasoning across tool
+calls. PAREL keeps each response's array as a provider artifact (`provider:
+openrouter`, `artifactType: openrouter_reasoning_details`, `replayScope:
+same_provider_model`) and sends it back unchanged on that assistant message in
+later calls to the same model. It is never sent to another model, nor to an
+`openai` or `compatible` endpoint. Arrays in other formats are not kept yet:
+their replay rules differ by provider.
+
 
 ## Prompt cache
 

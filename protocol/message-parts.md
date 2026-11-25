@@ -45,7 +45,7 @@ Reasoning visibility is provider-dependent. PAREL stores exposed reasoning in `r
 
 `providerArtifacts` preserve provider-specific replay material without leaking provider-specific shape into the core transcript.
 
-Examples include Anthropic thinking signatures, redacted thinking blocks, and OpenAI Responses reasoning item identifiers.
+Examples include Anthropic thinking signatures, redacted thinking blocks, OpenAI Responses reasoning item identifiers, and OpenRouter `reasoning_details` arrays, which carry Gemini thought signatures (see [model calls](model-calls.md#reasoning-state-on-the-openrouter-dialect)).
 
 `requiredForReplay` tells SDKs and exporters whether removing the artifact may make exact replay impossible.
 
