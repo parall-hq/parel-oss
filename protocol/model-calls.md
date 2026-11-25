@@ -100,13 +100,17 @@ on what the agent configured, never on the model name:
 | Configured | Anthropic Messages | Chat Completions / Responses |
 | --- | --- | --- |
 | `effort` | Adaptive thinking with `output_config.effort` | The dialect's level field |
-| `budgetTokens` only | Manual thinking with `thinking.budget_tokens` | The dialect's budget field; a level-only format (`openai`, Responses) converts it: ≤ 4096 low, ≤ 8192 medium, above that high |
+| `budgetTokens` only | Adaptive thinking at the level the budget stands for | The dialect's budget field; a level-only format (`openai`, Responses) gets the level the budget stands for, at most `high` |
 | Neither | As `effort: medium` | As `effort: medium` |
 
-`model.config.thinkingMode` (Anthropic) overrides that choice: `adaptive` or
-`enabled` (manual) runs as written, taking a missing level from the budget as
-above and a missing budget from the level (low 4096, medium 8192, high 16384);
-`disabled` turns thinking off. Manual thinking must fit below the
+A budget stands for the first level whose budget covers it: low 4096, medium
+8192, high 16384, xhigh 32768, max 65536 (above 32768 is max).
+
+`model.config.thinkingMode` (Anthropic) overrides that choice: `enabled` asks
+for manual thinking with `thinking.budget_tokens`, taking a missing budget from
+the level (the same table); `adaptive` is the default above; `disabled` turns
+thinking off. Current Claude models reject manual thinking, so `enabled` is for
+older models that require it. Manual thinking must fit below the
 [output limit](#output-limit); incompatible explicit limits fail before sending
 a request. Provider configuration changes follow normal immutable agent
 versioning; existing pinned sessions are not rewritten.
