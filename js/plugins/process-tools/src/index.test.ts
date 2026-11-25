@@ -1,4 +1,5 @@
 import type { PluginContext, ToolDefinition, ToolHandler } from "@parel/plugin-sdk";
+import { LifecycleEvent } from "@parel/plugin-sdk";
 import { WORKSPACE_CAPABILITY, type WorkspaceCapability } from "@parel/workspace";
 import { describe, expect, it, vi } from "vitest";
 import type { ProcessCapability, ProcessHandle } from "./index.js";
@@ -7,13 +8,17 @@ import processToolsPlugin from "./index.js";
 interface Harness {
 	ctx: PluginContext;
 	tools: Map<string, { def: ToolDefinition; handler: ToolHandler }>;
+	hooks: Map<string, (hookCtx: unknown) => Promise<unknown>>;
+	records: Map<string, ProcessHandle>;
 	processes: ProcessCapability;
 	start: ReturnType<typeof vi.fn>;
+	stop: ReturnType<typeof vi.fn>;
 }
 
 function makeHarness(opts: { root?: string } = {}) {
 	const root = opts.root ?? "/workspace/repo";
 	const tools = new Map<string, { def: ToolDefinition; handler: ToolHandler }>();
+	const hooks = new Map<string, (hookCtx: unknown) => Promise<unknown>>();
 	const records = new Map<string, ProcessHandle>();
 
 	const workspace: WorkspaceCapability = {
@@ -54,6 +59,14 @@ function makeHarness(opts: { root?: string } = {}) {
 		return record;
 	});
 
+	const stop = vi.fn(async (processId: string) => {
+		const process = records.get(processId);
+		if (!process) throw new Error(`unknown process: ${processId}`);
+		const stopped = { ...process, status: "stopped" as const };
+		records.set(processId, stopped);
+		return { stopped: true, process: stopped };
+	});
+
 	const processes: ProcessCapability = {
 		start,
 		async list() {
@@ -68,13 +81,7 @@ function makeHarness(opts: { root?: string } = {}) {
 				stderrPath: "/tmp/parel/processes/proc_1/stderr.log",
 			};
 		},
-		async stop(processId) {
-			const process = records.get(processId);
-			if (!process) throw new Error(`unknown process: ${processId}`);
-			const stopped = { ...process, status: "stopped" as const };
-			records.set(processId, stopped);
-			return { stopped: true, process: stopped };
-		},
+		stop,
 	};
 
 	const ctx = {
@@ -92,11 +99,13 @@ function makeHarness(opts: { root?: string } = {}) {
 			tools.set(def.name, { def, handler });
 		},
 		provide() {},
-		hook() {},
+		hook(event: string, handler: (hookCtx: unknown) => Promise<unknown>) {
+			hooks.set(event, handler);
+		},
 		interrupt() {},
 	} as unknown as PluginContext;
 
-	return { ctx, tools, processes, start } satisfies Harness;
+	return { ctx, tools, hooks, records, processes, start, stop } satisfies Harness;
 }
 
 describe("@parel/process-tools", () => {
@@ -149,6 +158,34 @@ describe("@parel/process-tools", () => {
 			.get("workspace_stop_process")
 			?.handler({ processId: "proc_1" }, {} as never);
 		expect(stop).toBe("Stopped process proc_1.");
+	});
+
+	it("stops every running process when the session is stopped", async () => {
+		const h = makeHarness();
+		await processToolsPlugin.setup(h.ctx);
+		const handle = (id: string, status: ProcessHandle["status"]): ProcessHandle => ({
+			id,
+			pid: 1,
+			command: "sleep 600",
+			stdoutPath: `/tmp/${id}/stdout.log`,
+			stderrPath: `/tmp/${id}/stderr.log`,
+			startedAt: "earlier",
+			status,
+		});
+		h.records.set("proc_old", handle("proc_old", "running"));
+		h.records.set("proc_new", handle("proc_new", "running"));
+		h.records.set("proc_done", handle("proc_done", "stopped"));
+		h.records.set("proc_gone", handle("proc_gone", "unknown"));
+		h.stop.mockImplementationOnce(async () => {
+			throw new Error("sandbox unreachable");
+		});
+
+		// One failed stop must not keep the others running or fail the hook.
+		await expect(
+			h.hooks.get(LifecycleEvent.SessionStop)?.({ reason: "Stopped from the console" }),
+		).resolves.toBeUndefined();
+
+		expect(h.stop.mock.calls.map(([id]) => id).sort()).toEqual(["proc_new", "proc_old"]);
 	});
 
 	it("rejects escaping working directories", async () => {

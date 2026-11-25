@@ -113,6 +113,7 @@ entry and does not fail the request.
 | `budget_exceeded` | 409 | The instance's spending budget (`runtime.instanceBudgetUsd`) is used up. |
 | `turn_limit` | 409 | The session reached `runtime.maxTurns`. |
 | `session_terminated` | 409 | The session has ended. |
+| `turn_stopped` | turn | Someone stopped the turn with `POST /sessions/{sessionId}/stop`. The session keeps going. |
 | `instance_not_found` | 404 | `requireExistingInstance` was set and the instance does not exist. |
 | `instance_generation_mismatch` | 409 | `expectedInstanceGeneration` does not match: the instance was reset. |
 | `media_invalid` | 400 | A media part is malformed or its type is not allowed. |
@@ -138,9 +139,9 @@ total budget.
 including failures after visible progress. Clients should deduplicate by the
 normal step cursor and tolerate unknown step types.
 
-Session termination cancels active model requests and prevents further requests
-or tool dispatch after cancellation is observed. It does not undo an external
-operation that has already started.
+Session termination and `POST /sessions/{sessionId}/stop` cancel active model
+requests and prevent further requests or tool dispatch after cancellation is
+observed. They do not undo an external operation that has already started.
 
 ## Rate Limits
 
@@ -288,6 +289,7 @@ unless you name another) and keeps its history until it is terminated.
 | `GET` | `/sessions` | query | List sessions, most recently updated first. Query: `agent_id` (the id, not the name), `status`, `limit` (≤ 200, default 50), `offset`. |
 | `GET` | `/sessions/{sessionId}` | none | Get a session's state, including `lastActivityAt` and what it is doing now. |
 | `POST` | `/sessions/{sessionId}/fork` | `{ "input"?, "idempotencyKey"? }` | Copy the session's history and state into a new, independent session. See [Fork](#fork). |
+| `POST` | `/sessions/{sessionId}/stop` | `{ "reason"? }` | Stop everything the session is doing and keep the session. See [Stop](#stop). |
 | `POST` | `/sessions/{sessionId}/terminate` | `{ "reason"? }` | End a session: stops a running turn and refuses further messages. Safe to repeat. Returns `{ "terminated": boolean, "status": "..." }`; `terminated: false` means it had already ended. |
 | `GET` | `/sessions/{sessionId}/commands` | none | List the slash commands this session accepts. See [Slash Commands](#slash-commands). |
 | `GET` | `/sessions/{sessionId}/ws` | WebSocket subprotocol token | Open the session WebSocket (see [websocket.md](websocket.md)). |
@@ -309,6 +311,33 @@ unless you name another) and keeps its history until it is terminated.
 
 // POST /sessions  { "agent": "my-agent", "version": "v4" }
 { "id": "ssn_...", "agentId": "agt_...", "ephemeral": true, "version": "ver_...", "status": "ready" }
+```
+
+### Stop
+
+`POST /sessions/{sessionId}/stop` stops the turn that is running, right away,
+and keeps the session and its history:
+
+- The model call and tool calls in flight are cut off. The turn ends with
+  `status: "error"`, `completionKind: "cancelled"` and `errorCode:
+  "turn_stopped"`; inputs it had taken resolve to that receipt.
+- What the turn had done is kept in the history. A tool call that had no result
+  yet gets one saying it was stopped and its effects are unknown. `reason`
+  (at most 4000 characters) is added to the history as a note, so the model
+  sees it on the next turn.
+- The session's subagent sessions still running are stopped the same way, and
+  plugins are told to stop their background work (`session:stop`; for example
+  `@parel/process-tools` stops every running process it lists).
+- Messages waiting behind the turn are not dropped: the next one starts a turn
+  as usual.
+- With no turn running it does nothing.
+
+```jsonc
+// POST /sessions/ssn_.../stop  { "reason": "Stopped from the console by Ada at 14:02" }
+{ "stopped": true, "turnId": "trn_..." }
+
+// nothing running
+{ "stopped": false }
 ```
 
 ### Fork
@@ -499,7 +528,9 @@ on.
 - A message that is still queued has no turn fields yet:
   `{ "inputId", "sessionId", "status": "queued", "terminal": false }`. A
   message that was queued when the session was terminated reports
-  `status: "cancelled"` with no turn fields. A slash command that ran without a
+  `status: "cancelled"` with no turn fields. A turn that was stopped midway
+  (`/stop` or `/terminate`) has turn fields, `completionKind: "cancelled"`, and
+  `errorCode` `turn_stopped` or `session_terminated`. A slash command that ran without a
   turn reports `status: "executed"`.
 
 ## Events and Observability

@@ -17,6 +17,7 @@ export const LifecycleEvent = {
 	SessionResume: "session:resume",
 	SessionSuspend: "session:suspend",
 	SessionEnd: "session:end",
+	SessionStop: "session:stop",
 
 	TurnStart: "turn:start",
 	TurnEnd: "turn:end",
@@ -64,6 +65,16 @@ export interface HookEventMap {
 	"session:resume": { ctx: EmptyCtx; mut: never };
 	"session:suspend": { ctx: EmptyCtx; mut: never };
 	"session:end": { ctx: EmptyCtx; mut: never };
+	/**
+	 * Someone asked the session to stop everything it is doing. The host has
+	 * already cut off the turn in flight; a plugin stops the work it started
+	 * outside that turn's call stack (background processes, promoted commands).
+	 * The session lives on and keeps its context — this is not `session:end`.
+	 * Best-effort and time-bounded: the host may dispatch it on a different
+	 * plugin runtime than the one that started the work, so find that work
+	 * through durable records (store / instance store), never in-memory handles.
+	 */
+	"session:stop": { ctx: { reason: string }; mut: never };
 	"turn:start": { ctx: EmptyCtx; mut: never };
 	"turn:end": { ctx: EmptyCtx; mut: never };
 	"step:start": { ctx: EmptyCtx; mut: never };

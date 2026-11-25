@@ -209,7 +209,17 @@ export type AgentEvent =
 			/** Whether the turn enqueued an outbound delivery back to this connection. */
 			hadOutput: boolean;
 	  })
-	| (AgentEventBase & { type: "turn_failed"; error: string })
+	| (AgentEventBase & {
+			type: "turn_failed";
+			error: string;
+			/**
+			 * Stable machine-readable classification of `error` when the platform has
+			 * one (additive; absent on older hosts). `turn_stopped`: someone stopped
+			 * the turn on purpose — the session lives on and its context is kept;
+			 * `session_terminated`: the session was terminated.
+			 */
+			code?: string;
+	  })
 	/**
 	 * Envelopes that arrived while the turn was running joined it at a step boundary
 	 * (binding `routing.injectInFlight`): the next model call sees them. Scope `turn`.

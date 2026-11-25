@@ -230,6 +230,7 @@ the plugin could duplicate external actions.
 | `session:resume` | The runtime resumes session work. |
 | `session:suspend` | The runtime is about to suspend session work. |
 | `session:end` | Session teardown. |
+| `session:stop` | Someone asked the session to stop everything (`POST /sessions/{id}/stop`). The host has already cut off the running turn; stop the background work you started. The session lives on. `hookCtx.reason` says why. Best-effort and time-bounded; it may run on a different plugin runtime than the one that started the work, so find that work through the store, not in-memory handles. |
 | `turn:start` | New user turn starts. |
 | `turn:end` | Turn finalizes. |
 | `step:start` | Model/tool loop step starts. |
