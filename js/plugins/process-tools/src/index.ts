@@ -1,6 +1,6 @@
 import {
 	definePlugin,
-	LifecycleEvent,
+	type LifecycleEvent,
 	type ToolContentRef,
 	type ToolOutput,
 } from "@parel/plugin-sdk";
@@ -46,6 +46,12 @@ interface ProcessIdParams {
 }
 
 const DEFAULT_TAIL_BYTES = 32 * 1024;
+
+// The hook is registered by its name, not by reading `LifecycleEvent.SessionStop` at
+// runtime: the host bundles one copy of each package per plugin graph, so next to a
+// plugin that pins an older @parel/plugin-sdk (from before `session:stop`) this plugin
+// gets that copy, the constant is undefined, and the hook would never run.
+const SESSION_STOP = "session:stop" satisfies typeof LifecycleEvent.SessionStop;
 
 function numericParam(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : undefined;
@@ -213,7 +219,7 @@ export default definePlugin({
 		// A stop request stops everything the agent has running in its process
 		// table — including a long foreground command a sandbox promoted to the
 		// background — not only what the cut-off turn started.
-		ctx.hook(LifecycleEvent.SessionStop, async () => {
+		ctx.hook(SESSION_STOP, async () => {
 			const running = (await processes.list()).filter((process) => process.status === "running");
 			const results = await Promise.allSettled(
 				running.map((process) => processes.stop(process.id)),
