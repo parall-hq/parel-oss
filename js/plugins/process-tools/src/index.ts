@@ -1,4 +1,9 @@
-import { definePlugin, type ToolContentRef, type ToolOutput } from "@parel/plugin-sdk";
+import {
+	definePlugin,
+	LifecycleEvent,
+	type ToolContentRef,
+	type ToolOutput,
+} from "@parel/plugin-sdk";
 import { WORKSPACE_CAPABILITY, type WorkspaceCapability } from "@parel/workspace";
 
 export interface ProcessHandle {
@@ -204,5 +209,22 @@ export default definePlugin({
 					: `Process ${processId} was not running.`;
 			},
 		);
+
+		// A stop request stops everything the agent has running in its process
+		// table — including a long foreground command a sandbox promoted to the
+		// background — not only what the cut-off turn started.
+		ctx.hook(LifecycleEvent.SessionStop, async () => {
+			const running = (await processes.list()).filter((process) => process.status === "running");
+			const results = await Promise.allSettled(
+				running.map((process) => processes.stop(process.id)),
+			);
+			results.forEach((result, index) => {
+				if (result.status === "rejected") {
+					const message =
+						result.reason instanceof Error ? result.reason.message : String(result.reason);
+					ctx.log.warn(`Failed to stop process ${running[index]?.id} on session stop: ${message}`);
+				}
+			});
+		});
 	},
 });
