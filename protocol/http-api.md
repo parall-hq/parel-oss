@@ -317,8 +317,8 @@ unless you name another) and keeps its history until it is terminated.
 
 ### Stop
 
-`POST /sessions/{sessionId}/stop` stops the turn that is running, right away,
-and keeps the session and its history:
+`POST /sessions/{sessionId}/stop` stops everything the session is doing, right
+away, and keeps the session and its history. If a turn is running:
 
 - The model call and tool calls in flight are cut off. The turn ends with
   `status: "error"`, `completionKind: "cancelled"` and `errorCode:
@@ -327,18 +327,28 @@ and keeps the session and its history:
   yet gets one saying it was stopped and its effects are unknown. `reason`
   (at most 4000 characters) is added to the history as a note, so the model
   sees it on the next turn.
-- The session's subagent sessions still running are stopped the same way, and
-  plugins are told to stop their background work (`session:stop`; for example
-  `@parel/process-tools` stops every running process it lists).
 - Messages waiting behind the turn are not dropped: the next one starts a turn
   as usual.
-- With no turn running it does nothing.
+
+Whether or not a turn is running:
+
+- The session's subagent sessions that are still working are stopped the same
+  way and then ended: nothing reads their results any more, so messages queued
+  for them are dropped and they take no new ones. When this stops subagents, a
+  note in the history tells the model their results will not arrive. A child
+  session a channel connector started is only stopped: it keeps taking the
+  connector's follow-ups.
+- Plugins are told to stop their background work (`session:stop`; for example
+  `@parel/process-tools` stops every running process it lists).
+
+`stopped` says whether a turn was stopped. A session that has ended does
+nothing.
 
 ```jsonc
 // POST /sessions/ssn_.../stop  { "reason": "Stopped from the console by Ada at 14:02" }
 { "stopped": true, "turnId": "trn_..." }
 
-// nothing running
+// no turn running (subagents and background work are still stopped)
 { "stopped": false }
 ```
 
