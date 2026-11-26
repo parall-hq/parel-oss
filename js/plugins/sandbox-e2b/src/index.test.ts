@@ -534,6 +534,24 @@ describe("@parel/sandbox-e2b", () => {
 				expected: { content: "", isError: false },
 			},
 			{
+				name: "exit 0 keeps stdout verbatim when stderr is empty",
+				result: { exitCode: 0, stdout: "hello\n", stderr: "" },
+				expected: { content: "hello\n", isError: false },
+			},
+			{
+				// `parall messages send …; cd ~; sed …`: the send failed and wrote
+				// its error to stderr, the trailing command exited 0. Rendering
+				// stdout alone showed the model an empty success.
+				name: "exit 0 still shows stderr from an earlier failing command in the line",
+				result: { exitCode: 0, stdout: "", stderr: '{"error":"Chat ID required"}' },
+				expected: { content: '{"error":"Chat ID required"}', isError: false },
+			},
+			{
+				name: "exit 0 keeps BOTH stdout and stderr",
+				result: { exitCode: 0, stdout: '{"id":"msg_1"}', stderr: "Sent prll://msg_1" },
+				expected: { content: '{"id":"msg_1"}\nSent prll://msg_1', isError: false },
+			},
+			{
 				name: "exit 7 with no output keeps its exit code",
 				result: { exitCode: 7, stdout: "", stderr: "" },
 				expected: { content: "Exit code: 7", isError: true },
@@ -559,6 +577,22 @@ describe("@parel/sandbox-e2b", () => {
 			await h.hooks.get(LifecycleEvent.SessionStart)?.();
 
 			expect(await h.tools.get("bash")?.({ command: "probe" }, toolCtx)).toEqual(expected);
+		});
+
+		it("exec capability keeps stdout-only text on success (plugins parse it)", async () => {
+			const sandbox = makeSandbox();
+			sandbox.commands.run.mockResolvedValue({
+				exitCode: 0,
+				stdout: "main\n",
+				stderr: "warning: noise",
+			});
+			sandboxMock.create.mockResolvedValue(sandbox);
+			const h = makeHarness();
+			await sandboxE2bPlugin.setup(h.ctx);
+			await h.hooks.get(LifecycleEvent.SessionStart)?.();
+
+			const exec = h.provided.get("exec") as { run(cmd: string): Promise<string> };
+			expect(await exec.run("git branch --show-current")).toBe("main\n");
 		});
 
 		it("sandbox capability exec surfaces exitCode/stderr as a result", async () => {

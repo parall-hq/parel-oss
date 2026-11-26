@@ -100,17 +100,26 @@ export function renderCommandText(result: SandboxCommandOutcome): string {
 }
 
 /**
- * Tool-result form: the same text, plus the `isError` flag the runtime records
- * as the structured success/error status. Returning a bare string instead
- * makes every result — including exit 127 — persist as `success`, because the
- * kernel reads `isError ?? false`. Shell tools must use this, not
- * `renderCommandText`.
+ * Tool-result form, plus the `isError` flag the runtime records as the
+ * structured success/error status. Returning a bare string instead makes every
+ * result — including exit 127 — persist as `success`, because the kernel reads
+ * `isError ?? false`. Shell tools must use this, not `renderCommandText`.
+ *
+ * A failure renders exactly as `renderCommandText` does. A success differs: it
+ * keeps stderr after stdout, because the model reads this text and a zero exit
+ * does not mean nothing went wrong. A shell line's exit status is its LAST
+ * command's, so in `a; b` where `a` fails and `b` succeeds, `a`'s error exists
+ * only on stderr — dropping it shows the model an empty success for a step
+ * that did not happen. CLIs also write their conclusions and next steps to
+ * stderr on success. `renderCommandText` keeps stdout-only success because
+ * plugins parse `exec.run` output programmatically.
  */
 export function renderCommandToolOutput(result: SandboxCommandOutcome): {
 	content: string;
 	isError: boolean;
 } {
-	return { content: renderCommandText(result), isError: result.exitCode !== 0 };
+	if (result.exitCode !== 0) return { content: renderCommandText(result), isError: true };
+	return { content: [result.stdout, result.stderr].filter(Boolean).join("\n"), isError: false };
 }
 
 export interface SandboxProcessOutputOptions {
