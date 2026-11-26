@@ -1,5 +1,12 @@
 # @parel/budget-cap
 
+## 0.0.34
+
+### Patch Changes
+
+- Updated dependencies [2941915]
+  - @parel/plugin-sdk@0.19.0
+
 ## 0.0.33
 
 ### Patch Changes

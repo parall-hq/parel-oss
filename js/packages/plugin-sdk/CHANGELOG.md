@@ -1,5 +1,17 @@
 # @parel/plugin-sdk
 
+## 0.19.0
+
+### Minor Changes
+
+- 2941915: Add the `session:stop` lifecycle event: someone asked the session to stop everything it is doing (`POST /sessions/{id}/stop`); the session lives on. `@parel/process-tools` handles it by stopping every running process it lists. The channel `turn_failed` agent event gains an optional `code` (`turn_stopped`, `session_terminated`).
+
+### Patch Changes
+
+- Updated dependencies [c4cc34f]
+- Updated dependencies [2941915]
+  - @parel/core@0.22.0
+
 ## 0.18.0
 
 ### Minor Changes

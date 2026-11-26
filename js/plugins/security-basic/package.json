@@ -1,6 +1,6 @@
 {
   "name": "@parel/security-basic",
-  "version": "0.1.30",
+  "version": "0.1.31",
   "description": "PAREL plugin for basic command and secret safety checks.",
   "keywords": [
     "parel",

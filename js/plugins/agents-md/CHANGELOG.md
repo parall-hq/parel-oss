@@ -1,5 +1,13 @@
 # @parel/agents-md
 
+## 0.1.1
+
+### Patch Changes
+
+- Updated dependencies [2941915]
+  - @parel/plugin-sdk@0.19.0
+  - @parel/workspace@0.2.14
+
 ## 0.1.0
 
 ### Minor Changes
