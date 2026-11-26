@@ -1,5 +1,11 @@
 # @parel/process-tools
 
+## 0.2.1
+
+### Patch Changes
+
+- b0d26b8: The `session:stop` hook now registers by its name. A plugin graph holds one copy of each package, so next to a plugin that pins an older `@parel/plugin-sdk` the `LifecycleEvent.SessionStop` constant was undefined and the hook never ran: running processes kept running after a stop.
+
 ## 0.2.0
 
 ### Minor Changes
