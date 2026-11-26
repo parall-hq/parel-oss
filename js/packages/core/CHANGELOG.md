@@ -1,5 +1,15 @@
 # @parel/core
 
+## 0.22.0
+
+### Minor Changes
+
+- 2941915: Add the `session:stop` lifecycle event: someone asked the session to stop everything it is doing (`POST /sessions/{id}/stop`); the session lives on. `@parel/process-tools` handles it by stopping every running process it lists. The channel `turn_failed` agent event gains an optional `code` (`turn_stopped`, `session_terminated`).
+
+### Patch Changes
+
+- c4cc34f: Document that `context:build`'s `hookCtx.messages` carries the step's recent history (the host's window), and deprecate reading history through it in favour of `hookCtx.transcript.read(range)`.
+
 ## 0.21.0
 
 ### Minor Changes
